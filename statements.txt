@@ -1,0 +1,26 @@
+create table users(uid integer auto_increment, primary key(uid), fullname char(40) not null, username char(20) unique not null, passwd char(20) not null, games_played integer not null default 0, win integer not null default 0, loss integer not null default 0, created timestamp default current_timestamp);
+
+create table games(gid integer auto_increment, primary key(gid), uid1 integer not null, uid2 integer not null, score char(10), played timestamp default current_timestamp);
+
+## Create new user
+insert into users (fullname, username, passwd) values (new_name, new_user, new_pass);
+
+
+## Create new game
+insert into games (uid1, uid2, score) values (new_uid1, new_uid2, new_score);
+
+## Update a win or loss
+update users set games_played = games_played + 1 where uid = new_uid;
+if(new_uid == win)
+update users set win = win + 1 where uid = new_uid;
+if(new_uid == loss)
+update users set loss = loss + 1 where uid = new_uid;
+
+## Check user registration
+select uid, username, passwd from users;
+if(username == new_username && password == new_password)
+then new_uid = uid
+
+## Show rating
+select username, games_played, IF(win/loss is null,"undef",win/loss) as rating from users group by rating order by rating desc;
+
