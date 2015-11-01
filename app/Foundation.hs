@@ -11,3 +11,5 @@ data Pong = Pong {
     chatChan :: TChan Text,
     nextGameId :: TVar
 }
+
+--General Flow of Game Updates

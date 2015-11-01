@@ -1,10 +1,29 @@
 {-# LANGUAGE DeriveGeneric #-}
 module Game
     ( Game
+    , Status
+    , printGame
+    , gameChan
+    , gameStatus
     , initGame
     , tick
     , movePaddle
+    , getWinLose
+    , setReady
+    , setCompleted
     ) where
+{-
+User key movements translate to either
+    setReady
+    movePaddle
+
+General flow of game updates
+    tick
+    check for CompletedNotLogged games
+    if CompletedNotLogged
+        call getWinLose & update win/lose in db
+        set game to be Completed    
+-}
 
 import MessageTypes
 
@@ -14,19 +33,28 @@ import Data.ByteString
 import Control.Concurrent.STM
 import GHC.Generics
 
+printGame :: Game -> IO ()
+printGame game = do
+    print "=========== BEGIN GAME ==========="
+    print $ "lPlayer: " ++ (lPlayer game)
+    print $ "rPlayer: " ++ (rPlayer game)
+    print "status:"
+    print (gameStatus game)
+    print (state game)
+    print "=========== END GAME ==========="
+
 _WIDTH = 500
 _HEIGHT = 600
 _BOTTOM = 0
 _LEFT = 0
 
-_INITIAL_BALL_X = 0.5
-_INITIAL_BALL_Y = 0.5
-_INITIAL_BALL_V = 0.002
-_INITIAL_PADDLE_V = 0.005 :: Double
+_INITIAL_BALL_X = _HEIGHT / 2
+_INITIAL_BALL_Y = _WIDTH / 2
+_INITIAL_BALL_V = 2
 
 _PADDLE_WIDTH = 20
 _PADDLE_HEIGHT = 5
-_BALL_RADIUS = 0.5
+_BALL_RADIUS = 5
 _MAX_SCORE = 1
 _PADDLE_MOVE = 10
 
@@ -52,7 +80,13 @@ data Paddle = Paddle {
 } deriving (Show, Generic)
 instance ToJSON Paddle
 
-data Status = Initial | LeftReady | RightReady | Playing | Completed deriving (Eq, Show, Generic)
+data Status = Initial 
+            | LeftReady
+            | RightReady
+            | Playing
+            | CompletedNotLogged
+            | Completed 
+            deriving (Eq, Show, Generic)
 instance ToJSON Status
 
 data StatusUpdate = StatusUpdate {
@@ -78,8 +112,7 @@ data Game = Game {
     lPlayer :: String, 
     rPlayer :: String,
     state :: GameState,
-    dataChan :: TChan (MessageType, Value),
-    dbChan :: TChan (String, String)
+    gameChan :: TChan (MessageType, Value)
 }
 
 createStatusUpdate :: Game -> StatusUpdate
@@ -120,16 +153,14 @@ initState =
               , maxScore = _MAX_SCORE
               }
 
-initGame :: String -> String -> TChan (String, String) -> IO Game
-initGame lPlayerName rPlayerName dbChan = do
-    dataChan <- newTChanIO
-    dbChan <- atomically $ dupTChan dbChan
+initGame :: String -> String -> IO Game
+initGame lPlayerName rPlayerName = do
+    gameChan <- newBroadcastTChanIO
     return Game { gameStatus = Initial
                 , lPlayer = lPlayerName
                 , rPlayer = rPlayerName
                 , state = initState
-                , dataChan = dataChan
-                , dbChan = dbChan
+                , gameChan = gameChan
                 }
 
 detectCollision :: GameState -> GameState
@@ -170,6 +201,10 @@ paddleHit state =
             = -vx
         | otherwise = vx
 
+writeStatusUpdate :: Game -> IO ()
+writeStatusUpdate game =
+    atomically $ writeTChan (gameChan game) $ (GameStatusMsg, toJSON $ createStatusUpdate game)
+
 {- 
 functions for externally updating game state
 -}
@@ -182,33 +217,26 @@ tick game = do
 tick' :: Game -> IO Game
 tick' game = do 
     let state' = update state
-    atomically $ writeTChan dataChan $ (GameStateMsg, toJSON state')
-    if isJust winLosePair
+    if lPoints == _MAX_SCORE || rPoints == _MAX_SCORE
         then do
-            let game = game { gameStatus = Completed }
-            atomically $ writeTChan dbChan $ fromJust winLosePair
-            atomically $ writeTChan dataChan $ (GameStatusMsg, toJSON $ createStatusUpdate game)
+            let game = game { gameStatus = CompletedNotLogged }
+            writeStatusUpdate game
             return game
-        else
+        else do
+            atomically $ writeTChan gameChan $ (GameStateMsg, toJSON state')
             return game { state = state' }
   where
-    Game _ lPlayer rPlayer state dataChan dbChan = game
+    Game _ _ _ state gameChan = game
     GameState _ _ _ lPoints rPoints _ _ _ = state
-    winLosePair
-        | lPoints == _MAX_SCORE = Just (lPlayer, rPlayer)
-        | rPoints == _MAX_SCORE = Just (rPlayer, lPlayer)
-        | otherwise = Nothing
     update = paddleHit . moveBall . detectCollision
 
 movePaddle :: Game -> String -> Direction -> IO Game
-movePaddle game player direction = do
-    case () of
-      ()
-        | player == lPlayer -> return game { state = state {lPaddle = movePaddle' state (lPaddle state) dir} }
-        | player == rPlayer -> return game { state = state {rPaddle = movePaddle' state (rPaddle state) dir} }
-        | otherwise -> return game
+movePaddle game player direction
+    | player == lPlayer = return game { state = state {lPaddle = movePaddle' state (lPaddle state) dir} }
+    | player == rPlayer = return game { state = state {rPaddle = movePaddle' state (rPaddle state) dir} }
+    | otherwise = return game
   where
-    Game _ lPlayer rPlayer state _ _ = game
+    Game _ lPlayer rPlayer state _ = game
     dir
         | direction == Up = _UP_DIR
         | direction == Down = _DOWN_DIR
@@ -220,3 +248,31 @@ movePaddle' state paddle direction =
     Paddle x y _ height = paddle
     newY = y + direction * _PADDLE_MOVE
     y' = min (_HEIGHT - height) $ max _BOTTOM newY
+
+getWinLose :: Game -> Maybe (String, String)
+getWinLose game
+    | lPoints == _MAX_SCORE = Just (lPlayer, rPlayer)
+    | rPoints == _MAX_SCORE = Just (rPlayer, lPlayer)
+    | otherwise = Nothing
+  where
+    Game _ lPlayer rPlayer state _ = game
+    GameState _ _ _ lPoints rPoints _ _ _ = state
+
+setReady :: Game -> String -> IO Game
+setReady game player =
+    return game { gameStatus = status' }
+  where
+    Game status lPlayer rPlayer _ _ = game
+    status'
+        | (player == lPlayer) && (status == Initial) = LeftReady
+        | (player == lPlayer) && (status == RightReady) = Playing
+        | (player == rPlayer) && (status == Initial) = RightReady
+        | (player == rPlayer) && (status == LeftReady) = Playing
+        | otherwise = status
+
+setCompleted :: Game -> IO Game
+setCompleted game = do
+    let status = gameStatus game
+    if status == CompletedNotLogged
+        then return game { gameStatus = Completed }
+        else return game
