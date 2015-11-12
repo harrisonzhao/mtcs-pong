@@ -2,6 +2,7 @@ module Main where
 
 import Lib
 import Game
+import Foundation
 
 main :: IO ()
 main = do

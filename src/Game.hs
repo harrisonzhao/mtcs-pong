@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 module Game
     ( Game
-    , Status
     , printGame
     , gameChan
     , gameStatus
@@ -10,6 +9,7 @@ module Game
     , movePaddle
     , getWinLose
     , setReady
+    , needsLogging
     , setCompleted
     ) where
 {-
@@ -25,7 +25,7 @@ General flow of game updates
         set game to be Completed    
 -}
 
-import MessageTypes
+import Messages
 
 import Data.Aeson
 import Data.Maybe
@@ -35,13 +35,13 @@ import GHC.Generics
 
 printGame :: Game -> IO ()
 printGame game = do
-    print "=========== BEGIN GAME ==========="
+    print "=========== BEGIN GAME PRINT ==========="
     print $ "lPlayer: " ++ (lPlayer game)
     print $ "rPlayer: " ++ (rPlayer game)
     print "status:"
     print (gameStatus game)
     print (state game)
-    print "=========== END GAME ==========="
+    print "=========== END GAME PRINT ==========="
 
 _WIDTH = 500
 _HEIGHT = 600
@@ -112,7 +112,7 @@ data Game = Game {
     lPlayer :: String, 
     rPlayer :: String,
     state :: GameState,
-    gameChan :: TChan (MessageType, Value)
+    gameChan :: TChan Message
 }
 
 createStatusUpdate :: Game -> StatusUpdate
@@ -202,8 +202,9 @@ paddleHit state =
         | otherwise = vx
 
 writeStatusUpdate :: Game -> IO ()
-writeStatusUpdate game =
-    atomically $ writeTChan (gameChan game) $ (GameStatusMsg, toJSON $ createStatusUpdate game)
+writeStatusUpdate game = do
+    let msg = newMessage GameStatusMsg (toJSON $ createStatusUpdate game)
+    atomically $ writeTChan (gameChan game) msg
 
 {- 
 functions for externally updating game state
@@ -223,7 +224,8 @@ tick' game = do
             writeStatusUpdate game
             return game
         else do
-            atomically $ writeTChan gameChan $ (GameStateMsg, toJSON state')
+            let msg = newMessage GameStateMsg (toJSON state')
+            atomically $ writeTChan gameChan $ msg
             return game { state = state' }
   where
     Game _ _ _ state gameChan = game
@@ -259,8 +261,10 @@ getWinLose game
     GameState _ _ _ lPoints rPoints _ _ _ = state
 
 setReady :: Game -> String -> IO Game
-setReady game player =
-    return game { gameStatus = status' }
+setReady game player = do
+    let game' = game { gameStatus = status' }
+    writeStatusUpdate game'
+    return game'
   where
     Game status lPlayer rPlayer _ _ = game
     status'
@@ -269,6 +273,9 @@ setReady game player =
         | (player == rPlayer) && (status == Initial) = RightReady
         | (player == rPlayer) && (status == LeftReady) = Playing
         | otherwise = status
+
+needsLogging :: Game -> Bool
+needsLogging game = (gameStatus game) == CompletedNotLogged
 
 setCompleted :: Game -> IO Game
 setCompleted game = do
