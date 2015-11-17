@@ -1,20 +1,6 @@
 {-# LANGUAGE QuasiQuotes, TemplateHaskell, TypeFamilies, OverloadedStrings, DeriveGeneric #-}
 module Main where
 
---import Lib
---import Game
-
---main :: IO ()
---main = do
---    let game = initGame "hello" "world"
---    let pg = (\g -> printGame g)
---    game >>= pg
---    let game' = game >>= (\g -> setReady g "hello") >>= (\g -> setReady g "world")
---    game' >>= pg
---    let game'' = game' >>= tick >>= tick >>= tick
---    game'' >>= pg
---    someFunc
-
 import Yesod.Core
 import Yesod.WebSockets
 import Conduit
@@ -59,6 +45,7 @@ updateGame game = (tick game) >>= \g -> do
             -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
             -- update database maybe in a different thread that kills itself
             -- maybe pass along the gameChan so a db updated message can also be seen by users
+            -- in order for users to be updated, another message type would be needed
             setCompleted g
         else return g
 
@@ -69,6 +56,8 @@ updateGames games = forever $ do
 
 createGame :: Pong -> String -> String -> IO ()
 createGame app lPlayer rPlayer = do
+    -- add player to player to gameId map
+    -- remove player from challenged map
     atomically $ do
         modifyTVar (nextGameId app) (\n -> n + 1)
         modifyTVar (games app) (\gs -> gs ++ [(initGame lPlayer rPlayer)])
@@ -105,6 +94,9 @@ msgSource username gameChan chatChan = forever $ do
         else yieldMsg msg
   where yieldMsg msg = yield $ toStrict $ encode $ msgData msg
 
+--msg is some web sockets data, which is of Text form
+handleMsg chatChannel msg = liftIO $ atomically $ writeTChan chatChannel $ newChatMsg msg
+
 appHandler :: WebSocketsT Handler ()
 appHandler = do
     sess <- getSession
@@ -116,9 +108,6 @@ appHandler = do
     race_
         (msgs $$ sinkWSText)
         (sourceWS $$ mapM_C msgHandler)
-
---msg is some web sockets data, which is of Text form
-handleMsg chatChannel msg = liftIO $ atomically $ writeTChan chatChannel $ newChatMsg msg
 
 getHomeR :: Handler Html
 getHomeR = do
@@ -176,9 +165,6 @@ main = do
     games <- newTVarIO ([] :: [IO Game])
     warp 3000 $ Pong games nextGameId chatChan
 
---getHomeR :: Handler Html
---getHomeR = do
---    webSockets appHandler
 {-
 dup the chatChannel
 
