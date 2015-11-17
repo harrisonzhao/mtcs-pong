@@ -33,14 +33,14 @@ updateGame :: Game -> IO Game
 updateGame game = (tick game) >>= \g -> do
     if needsLogging g
         then do
-            let (winner, loser) = getWinLose g
+            let maybeWinLosePair = getWinLose g
             -- update database maybe in a different thread that kills itself
             setCompleted g
         else return g
 
 updateGames :: TVar [IO Game] -> IO ()
 updateGames games = forever $ do
-    atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) games)
+    atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) gs)
     threadDelay _GAME_TICK_DELAY
 
 createGame :: Pong -> String -> String -> IO ()
@@ -48,24 +48,23 @@ createGame app lPlayer rPlayer = do
     atomically $ do
         let gameId = readTVarIO (nextGameId app)
         modifyTVar (nextGameId app) (\n -> n + 1)
-        modifyTVar (games app) (\gs -> gs ++ (initGame lPlayer rPlayer))
+        modifyTVar (games app) (\gs -> gs ++ [(initGame lPlayer rPlayer)])
     --insert lPlayer gameId (userToGameId app)
     --insert rPlayer gameId (userToGameId app)
         --writeTChan (chatChan app) for lPlayer
         --writeTChan (chatChan app) for rPlayer
 
---getGame :: Int -> TVar [IO Game] -> Maybe IO Game
-getGame id games = do
-    let gameList = readTVarIO games
-    if id < (length gameList)
-        then return Just gameList !! id
-        else return Nothing
+getGame :: Int -> Int -> TVar [IO Game] -> Maybe (IO Game)
+getGame id gameListLength games = do
+    if id < gameListLength
+        then Just $ (readTVarIO games) >>= (\games -> games !! id) 
+        else Nothing
 
 --leaveGame :: String -> Map String Int -> IO ()
 --leaveGame player userToGameId =
 --    delete player userToGameId
 
---appHandler :: WebSocketsT Handler ()
+appHandler :: WebSocketsT Handler ()
 appHandler = do
     sess <- getSession
     app <- getYesod
@@ -74,8 +73,11 @@ appHandler = do
     let writeChatChan = chatChan app
     race_
         (forever $ do
-            let msg = getMsgFromChans gameChannel chatChannel
-            (encode $ msg) >>= sendTextData
+            msg <- getMsgFromChans gameChannel chatChannel
+            if ((msgType msg) == ChallengeMsg &&
+                (challenged (msgData msg)) /= (lookupSession "username"))
+                then return
+                else (encode $ msg) >>= sendTextData
             -- if it's a challenge message not directed toward user ignore
             -- otherwise let chat continue
             --if ((msgType msg) == ChallengeMsg &&
@@ -86,11 +88,12 @@ appHandler = do
         (sourceWS $$ mapM_C (\msg ->
             atomically $ writeTChan writeChatChan $ ": " <> msg))
 
---getMsgFromChans :: IORef Maybe TChan Message -> TChan Message -> IO (Message)
+getMsgFromChans :: IORef (Maybe (TChan Message)) -> TChan Message -> IO (Message)
 getMsgFromChans gameChan chatChan = do
-    let isInGame = (readIORef gameChan) >>= (\gc -> isNothing gc)
-    let msg = if isInGame
-        then atomically $ readTChan gameChan `orElse` readTChan chatChan
+    maybeGameChan <- readIORef gameChan
+    let isInGame = not $ isNothing maybeGameChan
+    msg <- if isInGame
+        then atomically $ (readTChan $ fromJust maybeGameChan) `orElse` (readTChan chatChan)
         else atomically $ readTChan chatChan
     return msg
 

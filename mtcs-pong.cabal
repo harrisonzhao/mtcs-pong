@@ -31,6 +31,8 @@ executable mtcs-pong-exe
                      , yesod-core
                      , yesod-websockets
                      , stm
+                     , bytestring
+                     --, stm-lifted
                      , containers
                      , conduit-combinators
                      , aeson
