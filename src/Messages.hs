@@ -2,6 +2,7 @@
 module Messages where
 
 import Data.Aeson
+import Data.Text
 import GHC.Generics
 
 data MessageType = GameStatusMsg
@@ -13,6 +14,11 @@ data Challenge = Challenge {
     challenger :: String,
     challenged :: String
 } deriving (Show, Generic)
+instance ToJSON Challenge
+instance FromJSON Challenge
+
+newChatMsg :: Text -> Message
+newChatMsg msg = newMessage ChatMsg (toJSON msg)
 
 data Message = Message {
     msgType :: MessageType,

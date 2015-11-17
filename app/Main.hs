@@ -19,7 +19,6 @@ import Yesod.Core
 import Yesod.WebSockets
 import Conduit
 import Control.Monad
-import Control.Monad.Trans.Reader
 import Control.Concurrent.Chan
 import Control.Concurrent.STM
 import Control.Concurrent (threadDelay)
@@ -27,9 +26,8 @@ import Data.Aeson
 import Data.IORef
 import Data.Maybe
 import Data.Monoid ((<>))
-import Data.ByteString (ByteString)
+import Data.ByteString (ByteString, empty)
 import Data.ByteString.Lazy (toStrict)
-import Data.Time
 import qualified Data.Text.Lazy as TL
 --import Data.Map
 
@@ -58,7 +56,9 @@ updateGame game = (tick game) >>= \g -> do
     if needsLogging g
         then do
             let maybeWinLosePair = getWinLose g
+            -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
             -- update database maybe in a different thread that kills itself
+            -- maybe pass along the gameChan so a db updated message can also be seen by users
             setCompleted g
         else return g
 
@@ -83,18 +83,27 @@ getGame id gameListLength games = do
         then Just $ (readTVarIO games) >>= (\games -> games !! id) 
         else Nothing
 
---leaveGame :: String -> Map String Int -> IO ()
---leaveGame player userToGameId =
---    delete player userToGameId
-
-msgSource :: MonadIO m => IORef (Maybe (TChan Message)) -> TChan Message -> Source m ByteString
-msgSource gameChan chatChan = forever $ do
+-- Initialized by passing in the three parameters,
+-- each accepting connection has a different copy
+-- Continuously spits out messages to be sent to client
+-- Either:
+--     spits out a message formatted as {msgType: String, msgData: json}
+--     or empty string (if it's a challenge message not directed toward the user)
+msgSource :: MonadIO m => String -> IORef (Maybe (TChan Message)) -> TChan Message -> Source m ByteString
+msgSource username gameChan chatChan = forever $ do
     maybeGameChan <- liftIO $ readIORef gameChan
     let isInGame = not $ isNothing maybeGameChan
     msg <- liftIO $ if isInGame
         then atomically $ (readTChan $ fromJust maybeGameChan) `orElse` (readTChan chatChan)
         else atomically $ readTChan chatChan
-    yield $ toStrict $ encode $ msgData msg
+    if ((msgType msg) == ChallengeMsg)
+        then do
+            let challenge = decode $ encode $ msgData msg :: Maybe Challenge
+            if ((isJust challenge) && ((challenged (fromJust challenge)) == username))
+                then yieldMsg msg
+                else yield empty
+        else yieldMsg msg
+  where yieldMsg msg = yield $ toStrict $ encode $ msgData msg
 
 appHandler :: WebSocketsT Handler ()
 appHandler = do
@@ -102,43 +111,14 @@ appHandler = do
     app <- getYesod
     gameChannel <- liftIO $ newIORef Nothing
     chatChannel <- liftIO $ atomically $ dupTChan (chatChan app)
-    let msgs = msgSource gameChannel chatChannel
+    let msgs = msgSource "placeholder username" gameChannel chatChannel
+    let msgHandler = handleMsg chatChannel
     race_
         (msgs $$ sinkWSText)
-        (sourceWS $$ mapC TL.toUpper =$ sinkWSText)
-        --(sourceWS $$ mapM_C (\msg -> do liftIO $ print msg))
-            --atomically $ writeTChan chatChannel $ "hello" <> ": " <> msg)) -- send message
+        (sourceWS $$ mapM_C msgHandler)
 
-    --sess <- getSession
-    --app <- getYesod
-    --gameChannel <- newIORef Nothing
-    --chatChannel <- atomically $ dupTChan (chatChan app)
-    --let writeChatChan = chatChan app
-    --race_
-    --    (forever $ do
-            --msg <- getMsgFromChans gameChannel chatChannel
-            --if ((msgType msg) == ChallengeMsg &&
-            --    (challenged (msgData msg)) /= (lookupSession "username"))
-            --    then return
-            --    else (encode $ msg) >>= sendTextData
-    --        -- if it's a challenge message not directed toward user ignore
-    --        -- otherwise let chat continue
-    --        --if ((msgType msg) == ChallengeMsg &&
-    --        --    (challenged (msgData msg)) != (lookupSession "username"))
-    --        --   then return
-    --        --   else (encode $ toJSON msg) >>= sendTextData
-    --    )
-    --    (sourceWS $$ mapM_C (\msg ->
-    --        atomically $ writeTChan writeChatChan $ ": " <> msg))
-
---getMsgFromChans :: IORef (Maybe (TChan Message)) -> TChan Message -> IO (Data.ByteString.ByteString)
---getMsgFromChans gameChan chatChan = do
---    maybeGameChan <- readIORef gameChan
---    let isInGame = not $ isNothing maybeGameChan
---    msg <- if isInGame
---        then atomically $ (readTChan $ fromJust maybeGameChan) `orElse` (readTChan chatChan)
---        else atomically $ readTChan chatChan
---    return $ encode $ msgData msg
+--msg is some web sockets data, which is of Text form
+handleMsg chatChannel msg = liftIO $ atomically $ writeTChan chatChannel $ newChatMsg msg
 
 getHomeR :: Handler Html
 getHomeR = do
