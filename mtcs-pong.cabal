@@ -36,6 +36,9 @@ executable mtcs-pong-exe
                      , containers
                      , conduit-combinators
                      , aeson
+                     , text
+                     , transformers
+                     , time
   default-language:    Haskell2010
 
 test-suite mtcs-pong-test

@@ -19,14 +19,18 @@ import Yesod.Core
 import Yesod.WebSockets
 import Conduit
 import Control.Monad
+import Control.Monad.Trans.Reader
 import Control.Concurrent.Chan
 import Control.Concurrent.STM
-import Control.Concurrent
+import Control.Concurrent (threadDelay)
 import Data.Aeson
 import Data.IORef
 import Data.Maybe
 import Data.Monoid ((<>))
-import qualified Data.ByteString
+import Data.ByteString (ByteString)
+import Data.ByteString.Lazy (toStrict)
+import Data.Time
+import qualified Data.Text.Lazy as TL
 --import Data.Map
 
 import Messages
@@ -83,16 +87,26 @@ getGame id gameListLength games = do
 --leaveGame player userToGameId =
 --    delete player userToGameId
 
+msgSource :: MonadIO m => IORef (Maybe (TChan Message)) -> TChan Message -> Source m ByteString
+msgSource gameChan chatChan = forever $ do
+    maybeGameChan <- liftIO $ readIORef gameChan
+    let isInGame = not $ isNothing maybeGameChan
+    msg <- liftIO $ if isInGame
+        then atomically $ (readTChan $ fromJust maybeGameChan) `orElse` (readTChan chatChan)
+        else atomically $ readTChan chatChan
+    yield $ toStrict $ encode $ msgData msg
+
 appHandler :: WebSocketsT Handler ()
 appHandler = do
     sess <- getSession
     app <- getYesod
     gameChannel <- liftIO $ newIORef Nothing
     chatChannel <- liftIO $ atomically $ dupTChan (chatChan app)
+    let msgs = msgSource gameChannel chatChannel
     race_
-        --FOLLOWING 2 LINES ARE PROBLEM LINES
-        (forever $ lift $ (getMsgFromChans gameChannel chatChannel) >>= sendTextData)
-        (sourceWS $$ mapM_C (\msg -> do liftIO $ print msg))
+        (msgs $$ sinkWSText)
+        (sourceWS $$ mapC TL.toUpper =$ sinkWSText)
+        --(sourceWS $$ mapM_C (\msg -> do liftIO $ print msg))
             --atomically $ writeTChan chatChannel $ "hello" <> ": " <> msg)) -- send message
 
     --sess <- getSession
@@ -117,14 +131,14 @@ appHandler = do
     --    (sourceWS $$ mapM_C (\msg ->
     --        atomically $ writeTChan writeChatChan $ ": " <> msg))
 
-getMsgFromChans :: IORef (Maybe (TChan Message)) -> TChan Message -> IO (Data.ByteString.ByteString)
-getMsgFromChans gameChan chatChan = do
-    maybeGameChan <- readIORef gameChan
-    let isInGame = not $ isNothing maybeGameChan
-    msg <- if isInGame
-        then atomically $ (readTChan $ fromJust maybeGameChan) `orElse` (readTChan chatChan)
-        else atomically $ readTChan chatChan
-    return $ encode $ msgData msg
+--getMsgFromChans :: IORef (Maybe (TChan Message)) -> TChan Message -> IO (Data.ByteString.ByteString)
+--getMsgFromChans gameChan chatChan = do
+--    maybeGameChan <- readIORef gameChan
+--    let isInGame = not $ isNothing maybeGameChan
+--    msg <- if isInGame
+--        then atomically $ (readTChan $ fromJust maybeGameChan) `orElse` (readTChan chatChan)
+--        else atomically $ readTChan chatChan
+--    return $ encode $ msgData msg
 
 getHomeR :: Handler Html
 getHomeR = do
