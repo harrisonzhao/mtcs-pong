@@ -14,19 +14,24 @@ import Data.Maybe
 import Data.Monoid ((<>))
 import Data.ByteString (ByteString, empty)
 import Data.ByteString.Lazy (toStrict)
-import qualified Data.Text.Lazy as TL
---import Data.Map
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import Data.Text (Text)
 
 import Messages
 import Game
 
 data Pong = Pong {
-    --userToGameId :: Map String Int,
-    --challengedToChallenger :: Map String String,
     games :: TVar [IO Game],
     nextGameId :: TVar Int,
-    chatChan :: TChan Message
-    -- usersOnline :: TVar Set String
+    --chatChan can send chat and challenges
+    chatChan :: TChan Message,
+    --userToGameId maps users to an index for games list
+    userToGameId :: TVar (Map.Map String Int),
+    --map for challenged to challenger, modified whenever a challenge is sent or accepted
+    challengedToChallenger :: TVar (Map.Map String String),
+    --mapping for users online, checked if send challenge
+    usersOnline :: TVar (Set.Set String)
 }
 
 instance Yesod Pong
@@ -56,19 +61,40 @@ updateGames games = forever $ do
 
 createGame :: Pong -> String -> String -> IO ()
 createGame app lPlayer rPlayer = do
-    -- add player to player to gameId map
-    -- remove player from challenged map
     atomically $ do
+        currentGameId <- readTVar (nextGameId app)
         modifyTVar (nextGameId app) (\n -> n + 1)
         modifyTVar (games app) (\gs -> gs ++ [(initGame lPlayer rPlayer)])
-    --insert lPlayer gameId (userToGameId app)
-    --insert rPlayer gameId (userToGameId app)
-        --writeTChan (chatChan app) for lPlayer
-        --writeTChan (chatChan app) for rPlayer
+        modifyTVar (userToGameId app) (\mapping -> Map.insert lPlayer currentGameId mapping)
+        modifyTVar (userToGameId app) (\mapping -> Map.insert rPlayer currentGameId mapping)
+
+-- call this function to make a given user join a game
+-- it duplicates the games channel into the user's game channel IORef
+-- gameChannel is the user's gameChannel IORef, which is created in appHandler
+joinGame :: String -> IORef (Maybe (TChan Message)) -> Pong -> IO ()
+joinGame username gameCh app = do
+    gamesLength <- readTVarIO (nextGameId app)
+    userGameIdMap <- readTVarIO (userToGameId app)
+    let gameId = Map.lookup username userGameIdMap
+    if (isJust gameId)
+        then do
+            let game = getGame (fromJust gameId) gamesLength (games app)
+            if (isJust game)
+                then do
+                    ch <- (fromJust game) >>= (\g -> return (gameChan g))
+                    duppedCh <- atomically $ dupTChan ch
+                    modifyIORef gameCh (\_ -> Just duppedCh)
+                else return ()
+        else return ()
+
+-- leaves the game by clearing the game channel IORef
+leaveGame :: IORef (Maybe (TChan Message)) -> IO ()
+leaveGame gameChannel = do
+    modifyIORef gameChannel (\_ -> Nothing)
 
 getGame :: Int -> Int -> TVar [IO Game] -> Maybe (IO Game)
-getGame id gameListLength games = do
-    if id < gameListLength
+getGame id gamesLength games = do
+    if id < gamesLength
         then Just $ (readTVarIO games) >>= (\games -> games !! id) 
         else Nothing
 
@@ -78,6 +104,7 @@ getGame id gameListLength games = do
 -- Either:
 --     spits out a message formatted as {msgType: String, msgData: json}
 --     or empty string (if it's a challenge message not directed toward the user)
+-- see src/Messages.hs for all the different message types
 msgSource :: MonadIO m => String -> IORef (Maybe (TChan Message)) -> TChan Message -> Source m ByteString
 msgSource username gameChan chatChan = forever $ do
     maybeGameChan <- liftIO $ readIORef gameChan
@@ -94,13 +121,21 @@ msgSource username gameChan chatChan = forever $ do
         else yieldMsg msg
   where yieldMsg msg = yield $ toStrict $ encode $ msgData msg
 
---msg is some web sockets data, which is of Text form
+-- add more parameters as needed
+-- msg is some web sockets data, which is of Text form, it MUST be the last parameter
+-- msgs to handle:
+--      challenge {username}
+--      accept challenge from {username}
+--      chat {text}
+--      move paddle - only if in game
+--      leave game
 handleMsg chatChannel msg = liftIO $ atomically $ writeTChan chatChannel $ newChatMsg msg
 
 appHandler :: WebSocketsT Handler ()
 appHandler = do
     sess <- getSession
     app <- getYesod
+    -- gameChannel is an IORef because the underlying gameChannel could change
     gameChannel <- liftIO $ newIORef Nothing
     chatChannel <- liftIO $ atomically $ dupTChan (chatChan app)
     let msgs = msgSource "placeholder username" gameChannel chatChannel
@@ -160,10 +195,13 @@ getHomeR = do
 
 main :: IO ()
 main = do
-    chatChan <- atomically newBroadcastTChan
-    nextGameId <- newTVarIO (0 :: Int)
     games <- newTVarIO ([] :: [IO Game])
-    warp 3000 $ Pong games nextGameId chatChan
+    nextGameId <- newTVarIO (0 :: Int)
+    chatChan <- atomically newBroadcastTChan
+    userToGameId <- newTVarIO (Map.empty)
+    challengedToChallenger <- newTVarIO (Map.empty)
+    usersOnline <- newTVarIO (Set.empty)
+    warp 3000 $ Pong games nextGameId chatChan userToGameId challengedToChallenger usersOnline
 
 {-
 dup the chatChannel
