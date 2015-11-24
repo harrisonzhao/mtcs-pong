@@ -23,8 +23,8 @@ getHomeR = defaultLayout $ do
             <meta charset="utf-8">
         |]
     [whamlet|
-    <div class="login">
     <h1>Login to Pong Web App</h1>
+    <div class="login">
     <form method="post" action="index.html">
     <p><input type="text" name="login" value="" placeholder="Username or Email"></p>
     <p><input type="password" name="password" value="" placeholder="Password"></p>
