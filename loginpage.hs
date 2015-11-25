@@ -8,16 +8,41 @@ import           Data.Text           (Text)
 import           Data.Time           (Day)
 import           Yesod
 import           Yesod.Form.Jquery
+import           Database.Persist.Sqlite
+import           Control.Monad.Trans.Resource (runResourceT)
+import           Control.Monad.Logger (runStderrLoggingT)
 
-data App = App
+-- Define our entities as usual
+share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
+Person
+    username String
+    password String
+	age      Int
+    deriving Show
+|]
+
+-- We keep our connection pool in the foundation. At program initialization, we
+-- create our initial pool, and each time we need to perform an action we check
+-- out a single connection from the pool.
+data App = App ConnectionPool
+-- data App = App
 
 mkYesod "App" [parseRoutes|
 /         HomeR GET
 /register RegisterR GET
+/person/#PersonId PersonR GET
 /person   PersonR POST
 |]
 
 instance Yesod App
+
+-- Now we need to define a YesodPersist instance, which will keep track of
+-- which backend we're using and how to run an action.
+instance YesodPersist App where
+    type YesodPersistBackend App = SqlBackend
+    runDB action = do
+        App pool <- getYesod
+        runSqlPool action pool
 
 -- Tells our application to use the standard English messages.
 -- If you want i18n, then you can supply a translating function instead.
@@ -30,8 +55,8 @@ instance YesodJquery App
 
 -- The datatype we wish to receive from the login form
 data Person = Person
-    { personUsername      :: Text
-    , personPassword      :: Text
+    { username      :: Text
+    , password      :: Text
     }
   deriving Show
 
@@ -79,8 +104,9 @@ newAccountForm = renderDivs $ NewPerson
 getHomeR :: Handler Html
 getHomeR = do
     -- Generate the form to be displayed
+    people <- runDB $ selectList [] [Asc PersonAge]
     (widget, enctype) <- generateFormPost personForm
-    defaultLayout
+	defaultLayout
         [whamlet|
             <h1>Login to Pong Web App</h1>
             <a href=@{RegisterR}>Click to register for an acount!
@@ -89,6 +115,11 @@ getHomeR = do
                 <form method=post action=@{PersonR} enctype=#{enctype}>
                     ^{widget}
                     <button>Login
+			<p>
+			<ul>
+                $forall Entity personid person <- people
+                    <li>
+                        <a href=@{PersonR personid}>#{personFirstName person}
         |]
 
 getRegisterR :: Handler Html
@@ -102,6 +133,13 @@ getRegisterR = do
                 ^{widget}
                 <button>Register
         |]
+
+-- We'll just return the show value of a person, or a 404 if the Person doesn't
+-- exist.
+getPersonR :: PersonId -> Handler String
+getPersonR personId = do
+    person <- runDB $ get404 personId
+    return $ show person
 
 -- The POST handler processes the form. If it is successful, it displays the
 -- parsed person. Otherwise, it displays the form again with error messages.
@@ -119,5 +157,13 @@ postPersonR = do
                     <button>LoginAttempt2
             |]
 
+openConnectionCount :: Int
+openConnectionCount = 10
+
 main :: IO ()
-main = warp 3000 App
+main = runStderrLoggingT $ withSqlitePool "test.db3" openConnectionCount
+  $ \pool -> liftIO $ do
+    runResourceT $ flip runSqlPool pool $ do
+        runMigration migrateAll
+        insert $ Person "Michael" "Michaelspassword" 26
+    warp 3000 App pool
