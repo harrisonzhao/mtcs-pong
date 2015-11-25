@@ -26,11 +26,17 @@ Person
     deriving Show
 |]
 
+
 --getUser :: Text -> Text -> Maybe Person
---getUser :: Text -> Text -> Maybe Person
+--getUser :: Text -> Text -> Handler String
 --getUser un pw = do
+--    usercheck <- runDB $ get un
+--    case usercheck of
+--      Nothing -> notFound
+--      Just Person -> return Person
 --    usercheck <- getBy $ UsernameKey un
 --    liftIO $ print usercheck
+--    return $ show person
 --Check if password matches input 
 
 --createNew :: Text -> Text -> Text -> Maybe Person
