@@ -26,11 +26,33 @@ Person
     deriving Show
 |]
 
---getUser :: Text -> Maybe Person
-getUser :: Text -> Maybe Person
-getUser username = do
-    usercheck <- getBy $ UsernameKey username
-    liftIO $ print usercheck
+--getUser :: Text -> Text -> Maybe Person
+--getUser :: Text -> Text -> Maybe Person
+--getUser un pw = do
+--    usercheck <- getBy $ UsernameKey un
+--    liftIO $ print usercheck
+--Check if password matches input 
+
+--createNew :: Text -> Text -> Text -> Maybe Person
+--createNew un fn pw = do
+--    newId <- insert $ Person fn un pw 0 0 0 
+
+--userLoss :: Text -> Maybe Person
+--userLoss un = do
+--    updateWhere [PersonUsername ==. un] [PersonWin +=. 1]
+--    updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+
+--userWin :: Text -> Maybe Person   
+--userWin un = do
+--    updateWhere [PersonUsername ==. un] [PersonWin +=. 1]
+--    updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+
+--getTop :: Maybe Person
+--getTop = do
+--let sql = "select username, games_played, 
+-- IF(win/loss is null,"undef",win/loss) as rating from users 
+-- group by rating order by rating desc;"
+-- rawQuery sql [] $$ CL.mapM_ (liftIO . print)
 
 main :: IO ()
 main = runSqlite ":memory:" $ do
@@ -41,11 +63,8 @@ main = runSqlite ":memory:" $ do
     johnId <- insert $ Person "John Doe" s  "password" 0 0 0 
     janeId <- insert $ Person  "Jane Doe" "jdoe2" "password" 0 0 0
 
-    getUser s
-
---    update $ \a -> do
---	set a [personLoss =.  1]
---	where_ (a ^. personUsername ==. "jdoe2")
+    
+    updateWhere [PersonUsername ==. s] [PersonWin +=. 1]
 
 
     john <- get johnId
