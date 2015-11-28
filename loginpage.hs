@@ -14,13 +14,26 @@ import Data.Text (Text)
 import Database.Persist.Sqlite
 import Control.Monad.Trans.Resource (runResourceT)
 import Control.Monad.Logger (runStderrLoggingT)
+import           Control.Monad.IO.Class  (liftIO)
+import           Database.Persist
+import           Database.Persist.Sql
+import           Database.Persist.TH
+import           Data.Conduit
+import qualified Data.Conduit.List as CL
+import           Data.Text (Text)
+import qualified Data.Map as Map
+import Control.Monad.Reader
 
 -- Define our entities as usual
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 Person
-    firstName String
-    lastName String
-    age Int
+ fullname String
+ username String
+ UsernameKey username
+ password String
+ gamespl Int
+ win Int
+ loss Int
     deriving Show
 |]
 
@@ -83,7 +96,7 @@ newAccountForm = renderDivs $ NewPerson
 getHomeR :: Handler Html
 getHomeR = do
     (widget, enctype) <- generateFormPost userForm
-    people <- runDB $ selectList [] [Asc PersonAge]
+    people <- runDB $ selectList [] [Asc PersonWin]
     defaultLayout
         [whamlet|
             <h1>Login to Pong Web App</h1>
@@ -96,11 +109,9 @@ getHomeR = do
             <ul>
                 $forall Entity personid person <- people
                     <li>
-                        <a href=@{PersonR personid}>#{personFirstName person}
+                        <a href=@{PersonR personid}>#{personFullname person}
         |]
 
--- We'll just return the show value of a person, or a 404 if the Person doesn't
--- exist.
 getPersonR :: PersonId -> Handler String
 getPersonR personId = do
     person <- runDB $ get404 personId
@@ -148,6 +159,34 @@ postAccRegisterR = do
                     <button>RegisterAttempt2
             |]
 
+--getTop = do
+--	let sql = "select username, gamespl, CASE win/loss when null then 'undef' else win/loss END as rating from person group by rating order by rating desc;"
+--	rawQuery sql [] $$ CL.mapM_ (liftIO . print)
+
+userLoss un = do
+     updateWhere [PersonUsername ==. un] [PersonLoss +=. 1]
+     updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+
+userWin un = do
+     updateWhere [PersonUsername ==. un] [PersonWin +=. 1]
+     updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+
+createNew fn un pw = do
+     insert $ Person fn un pw 0 0 0
+--	newId <- insert $ Person fn un pw 0 0 0 
+
+getUser un pw = do
+	u<-selectList [PersonUsername ==. un, PersonPassword ==. pw] []
+	return $ show u
+--	usercheck <- getBy $ UsernameKey un
+--	return $ show usercheck
+
+--	case usercheck of
+--	 Nothing -> liftIO $ putStrLn "notFound"
+--	 Just (Entity personID person) -> liftIO $ print usercheck
+--	 Nothing -> notFound
+--	 Just (Entity personId person) -> return $ show person
+
 openConnectionCount :: Int
 openConnectionCount = 10
 main :: IO ()
@@ -155,5 +194,12 @@ main = runStderrLoggingT $ withSqlitePool "test.db3" openConnectionCount
   $ \pool -> liftIO $ do
     runResourceT $ flip runSqlPool pool $ do
         runMigration migrateAll
-        insert $ Person "Michael" "Snoyman" 26
+
+	createNew "fullname" "test" "pass"
+	userWin "test"
+	p<-getUser "test" "pass"
+
+	liftIO $ print p	
+
+
     warp 3000 $ PersistTest pool
