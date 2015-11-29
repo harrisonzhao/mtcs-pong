@@ -11,6 +11,7 @@ module Game
     , setReady
     , needsLogging
     , setCompleted
+    , Direction(Up,Down)
     ) where
 {-
 User key movements translate to either

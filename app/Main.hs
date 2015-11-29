@@ -7,7 +7,7 @@ import Conduit
 import Control.Monad
 import Control.Concurrent.Chan
 import Control.Concurrent.STM
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, forkIO)
 import Data.Aeson
 import Data.IORef
 import Data.Maybe
@@ -22,6 +22,7 @@ import qualified Data.Text as L
 
 import Messages
 import Game 
+import Game (Direction)
 
 data Pong = Pong {
     games :: TVar [IO Game],
@@ -138,8 +139,8 @@ handleMove app player direction = do
             gamesLength <- liftIO $ readTVarIO (nextGameId app)
             game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
             case direction of
-                "up" -> liftIO $ Game.movePaddle game pid (1)
-                "down" -> liftIO $ Game.movePaddle game pid (-1)
+                "up" -> liftIO $ movePaddle game pid Up
+                "down" -> liftIO $ movePaddle game pid Down
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
@@ -159,6 +160,8 @@ handleAccept app acceptingPlayer = do
             liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert acceptingPlayerU currentGameId s) 
             liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert (fromJust challenger) currentGameId s) 
             liftIO $ createGame app (fromJust challenger) acceptingPlayerU
+            --the channel should be the one from the game 
+            --i should dup it and then give to to both players that are joining the game
             gameChannel <- liftIO $ newIORef Nothing
             liftIO $ joinGame (fromJust challenger) gameChannel app 
             liftIO $ joinGame acceptingPlayerU gameChannel app 
@@ -267,6 +270,7 @@ main = do
     userToGameId <- newTVarIO (Map.empty)
     challengedToChallenger <- newTVarIO (Map.empty)
     usersOnline <- newTVarIO (Set.empty)
+    forkIO $ updateGames games 
     warp 3000 $ Pong games nextGameId chatChan userToGameId challengedToChallenger usersOnline
 
 {-
