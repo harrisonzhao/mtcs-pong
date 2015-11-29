@@ -136,10 +136,10 @@ handleMove app player direction = do
     if isJust gameId
         then do
             gamesLength <- liftIO $ readTVarIO (nextGameId app)
-            let game = getGame (fromJust gameId) gamesLength (games app)
-            --case direction of
-            --    "up" -> Game.movePaddle (fromJust game) pid (1)
-            --    "down" -> Game.movePaddle (fromJust game) pid (-1)
+            game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
+            case direction of
+                "up" -> liftIO $ Game.movePaddle game pid (1)
+                "down" -> liftIO $ Game.movePaddle game pid (-1)
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
