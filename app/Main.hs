@@ -16,10 +16,12 @@ import Data.ByteString (ByteString, empty)
 import Data.ByteString.Lazy (toStrict)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import Data.Text (Text)
+import Data.Text (Text, isPrefixOf, splitOn, unpack, pack, concat)
+import Data.String 
+import qualified Data.Text as L
 
 import Messages
-import Game
+import Game 
 
 data Pong = Pong {
     games :: TVar [IO Game],
@@ -121,15 +123,79 @@ msgSource username gameChan chatChan = forever $ do
         else yieldMsg msg
   where yieldMsg msg = yield $ toStrict $ encode $ msgData msg
 
--- add more parameters as needed
--- msg is some web sockets data, which is of Text form, it MUST be the last parameter
--- msgs to handle:
---      challenge {username}
---      accept challenge from {username}
---      chat {text}
---      move paddle - only if in game
---      leave game
-handleMsg chatChannel msg = liftIO $ atomically $ writeTChan chatChannel $ newChatMsg msg
+handleLogin app name = do 
+    liftIO $ atomically $ modifyTVar (usersOnline app) (\s -> Set.insert name s)
+    
+handleChat app msg = do 
+    liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg msg
+
+handleMove app player direction = do
+    let pid = unpack player 
+    myMap <- liftIO $ readTVarIO (userToGameId app)
+    let gameId = Map.lookup pid myMap
+    if isJust gameId
+        then do
+            gamesLength <- liftIO $ readTVarIO (nextGameId app)
+            let game = getGame (fromJust gameId) gamesLength (games app)
+            --case direction of
+            --    "up" -> Game.movePaddle (fromJust game) pid (1)
+            --    "down" -> Game.movePaddle (fromJust game) pid (-1)
+            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
+        else
+            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
+    
+handleChallenge app player1 player2 = do
+    liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.insert (unpack player2) (unpack player1) s)
+    liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg $ L.concat [player1, " ",player2]
+    
+handleAccept app acceptingPlayer = do
+    let acceptingPlayerU = unpack acceptingPlayer
+    myMap <- liftIO $ readTVarIO (challengedToChallenger app)
+    let challenger = Map.lookup acceptingPlayerU myMap
+    currentGameId <- liftIO $ readTVarIO (nextGameId app)
+    if isJust challenger
+        then do
+            liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.delete acceptingPlayerU s) 
+            liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert acceptingPlayerU currentGameId s) 
+            liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert (fromJust challenger) currentGameId s) 
+            liftIO $ createGame app (fromJust challenger) acceptingPlayerU
+            gameChannel <- liftIO $ newIORef Nothing
+            liftIO $ joinGame (fromJust challenger) gameChannel app 
+            liftIO $ joinGame acceptingPlayerU gameChannel app 
+        else
+            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "aceppted a nonexisting challenge"
+    
+handleLeave app msg = do
+    --need to actually implement this
+    liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "leave"
+
+handleOther app msg = do
+    liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg ""
+
+handleMsg app msg = do
+    let msgParsed = splitOn "`" msg
+    let msgType = msgParsed !! 0
+    case msgType of 
+        "login" -> 
+            handleLogin app $ unpack $ msgParsed !! 1
+        "chat" -> 
+            handleChat app msg 
+        "move" -> 
+            handleMove app (msgParsed !! 1) (msgParsed !! 2) 
+        "challenge" -> 
+            handleChallenge app (msgParsed !! 1) (msgParsed !! 2) 
+        "accept" -> 
+            handleAccept app (msgParsed !! 1)
+        "leave" -> 
+            handleLeave app msg 
+        _ -> 
+            handleOther app msg
+    mySet <- liftIO $ readTVarIO (usersOnline app)
+    liftIO $ print $ Set.toList mySet
+    myMap <- liftIO $ readTVarIO (userToGameId app)
+    liftIO $ print $ Map.toList myMap
+    myMap2 <- liftIO $ readTVarIO (challengedToChallenger app)
+    liftIO $ print $ Map.toList myMap2
 
 appHandler :: WebSocketsT Handler ()
 appHandler = do
@@ -139,7 +205,7 @@ appHandler = do
     gameChannel <- liftIO $ newIORef Nothing
     chatChannel <- liftIO $ atomically $ dupTChan (chatChan app)
     let msgs = msgSource "placeholder username" gameChannel chatChannel
-    let msgHandler = handleMsg chatChannel
+    let msgHandler = handleMsg app
     race_
         (msgs $$ sinkWSText)
         (sourceWS $$ mapM_C msgHandler)
