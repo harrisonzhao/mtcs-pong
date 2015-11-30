@@ -129,9 +129,6 @@ msgSource username gameChan chatChan = forever $ do
                 else yield empty
         else yieldMsg msg
   where yieldMsg msg = yield $ toStrict $ encode $ msgData msg
-
-handleLogin app name = do 
-    liftIO $ atomically $ modifyTVar (usersOnline app) (\s -> Set.insert name s)
     
 handleChat app msg = do 
     liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg msg
@@ -166,7 +163,6 @@ handleAccept app acceptingPlayer = do
             liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert acceptingPlayerU currentGameId s) 
             liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert (fromJust challenger) currentGameId s) 
             liftIO $ createGame app (fromJust challenger) acceptingPlayerU
-            gamesLength <- liftIO $ readTVarIO (nextGameId app)
             
             userGameChannelsMap <- liftIO $ readTVarIO (userGameChannels app)
             let player1GC = Map.lookup (fromJust challenger) userGameChannelsMap
@@ -175,6 +171,7 @@ handleAccept app acceptingPlayer = do
             liftIO $ joinGame (fromJust challenger) (fromJust player1GC) app 
             liftIO $ joinGame acceptingPlayerU (fromJust player2GC) app
 
+            gamesLength <- liftIO $ readTVarIO (nextGameId app)
             let game = liftIO $ fromJust $ getGame currentGameId gamesLength (games app)
             ch <-  game >>= (\g -> return (gameChan g))
             liftIO $ atomically $ writeTChan ch $ newChatMsg "you can proceed to the game!"
@@ -192,8 +189,6 @@ handleMsg app msg = do
     let msgParsed = splitOn "`" msg
     let msgType = msgParsed !! 0
     case msgType of 
-        "login" -> 
-            handleLogin app $ unpack $ msgParsed !! 1
         "chat" -> 
             handleChat app msg 
         "move" -> 
@@ -222,6 +217,8 @@ appHandler = do
     --instead of using counter, should just get last session popped onto the sessionMap
     counterNum <- liftIO $ readTVarIO (counter app)
     username <- lookupSession $ pack $ show counterNum
+    liftIO $ atomically $ modifyTVar (usersOnline app) (\s -> Set.insert (unpack (fromJust username)) s)
+
     liftIO $ atomically $ modifyTVar (counter app) (\n -> n + 1)
 
     liftIO $ atomically $ modifyTVar (userGameChannels app) (\s -> Map.insert (unpack (fromJust username)) gameChannel s)
