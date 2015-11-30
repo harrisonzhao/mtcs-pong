@@ -30,6 +30,7 @@ executable mtcs-pong-exe
                      , mtcs-pong
                      , yesod-core
                      , yesod-websockets
+                     , yesod-form
                      , stm
                      , bytestring
                      , containers

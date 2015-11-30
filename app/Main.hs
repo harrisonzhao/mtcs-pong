@@ -3,6 +3,7 @@ module Main where
 
 import Yesod.Core
 import Yesod.WebSockets
+import Yesod.Form
 import Conduit
 import Control.Monad
 import Control.Concurrent.Chan
@@ -34,13 +35,18 @@ data Pong = Pong {
     --map for challenged to challenger, modified whenever a challenge is sent or accepted
     challengedToChallenger :: TVar (Map.Map String String),
     --mapping for users online, checked if send challenge
-    usersOnline :: TVar (Set.Set String)
+    usersOnline :: TVar (Set.Set String),
+    --map for user to IORef to game channel
+    userGameChannels :: TVar (Map.Map String (IORef (Maybe (TChan Message)))),
+
+    counter :: TVar Int
 }
 
 instance Yesod Pong
 
 mkYesod "Pong" [parseRoutes|
-/ HomeR GET
+/       LoginR GET POST
+/lobby  LobbyR GET
 |]
 
 _GAME_TICK_DELAY = 1000000
@@ -160,11 +166,18 @@ handleAccept app acceptingPlayer = do
             liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert acceptingPlayerU currentGameId s) 
             liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert (fromJust challenger) currentGameId s) 
             liftIO $ createGame app (fromJust challenger) acceptingPlayerU
-            --the channel should be the one from the game 
-            --i should dup it and then give to to both players that are joining the game
-            gameChannel <- liftIO $ newIORef Nothing
-            liftIO $ joinGame (fromJust challenger) gameChannel app 
-            liftIO $ joinGame acceptingPlayerU gameChannel app 
+            gamesLength <- liftIO $ readTVarIO (nextGameId app)
+            
+            userGameChannelsMap <- liftIO $ readTVarIO (userGameChannels app)
+            let player1GC = Map.lookup (fromJust challenger) userGameChannelsMap
+            let player2GC = Map.lookup acceptingPlayerU userGameChannelsMap
+            
+            liftIO $ joinGame (fromJust challenger) (fromJust player1GC) app 
+            liftIO $ joinGame acceptingPlayerU (fromJust player2GC) app
+
+            let game = liftIO $ fromJust $ getGame currentGameId gamesLength (games app)
+            ch <-  game >>= (\g -> return (gameChan g))
+            liftIO $ atomically $ writeTChan ch $ newChatMsg "you can proceed to the game!"
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "aceppted a nonexisting challenge"
     
@@ -199,22 +212,55 @@ handleMsg app msg = do
     liftIO $ print $ Map.toList myMap
     myMap2 <- liftIO $ readTVarIO (challengedToChallenger app)
     liftIO $ print $ Map.toList myMap2
-
+    
 appHandler :: WebSocketsT Handler ()
 appHandler = do
     sess <- getSession
     app <- getYesod
-    -- gameChannel is an IORef because the underlying gameChannel could change
     gameChannel <- liftIO $ newIORef Nothing
+    
+    --instead of using counter, should just get last session popped onto the sessionMap
+    counterNum <- liftIO $ readTVarIO (counter app)
+    username <- lookupSession $ pack $ show counterNum
+    liftIO $ atomically $ modifyTVar (counter app) (\n -> n + 1)
+
+    liftIO $ atomically $ modifyTVar (userGameChannels app) (\s -> Map.insert (unpack (fromJust username)) gameChannel s)
     chatChannel <- liftIO $ atomically $ dupTChan (chatChan app)
-    let msgs = msgSource "placeholder username" gameChannel chatChannel
+    let msgs = msgSource ( unpack (fromJust username)) gameChannel chatChannel
     let msgHandler = handleMsg app
     race_
         (msgs $$ sinkWSText)
         (sourceWS $$ mapM_C msgHandler)
 
-getHomeR :: Handler Html
-getHomeR = do
+getLoginR :: Handler Html
+getLoginR = do
+    sess <- getSession
+    defaultLayout
+        [whamlet|
+            <form method=post>
+                <input type=text name=key>
+                <input type=text name=val>
+                <input type=submit>
+            <h1>
+        |]
+
+postLoginR :: Handler ()
+postLoginR = do
+    sess <- getSession
+    setSession "0" "sheryan"
+    setSession "1" "harrison"
+    setSession "2" "eugene"
+    setSession "3" "miraj"
+    --(key, mval) <- runInputPost $ (,) <$> ireq textField "key" <*> iopt textField "val"
+    --case mval of
+    --    Nothing -> deleteSession key
+    --    Just val -> setSession key val
+    --liftIO $ print (key, mval)
+    --msg <- runInputPost $ ireq textField "key"
+    redirect LobbyR
+
+getLobbyR :: Handler Html
+getLobbyR = do
     webSockets appHandler
     defaultLayout $ do
         [whamlet|
@@ -266,12 +312,14 @@ main :: IO ()
 main = do
     games <- newTVarIO ([] :: [IO Game])
     nextGameId <- newTVarIO (0 :: Int)
+    counter <- newTVarIO (0 :: Int)
     chatChan <- atomically newBroadcastTChan
     userToGameId <- newTVarIO (Map.empty)
     challengedToChallenger <- newTVarIO (Map.empty)
     usersOnline <- newTVarIO (Set.empty)
+    userGameChannels <- newTVarIO (Map.empty)
     forkIO $ updateGames games 
-    warp 3000 $ Pong games nextGameId chatChan userToGameId challengedToChallenger usersOnline
+    warp 3000 $ Pong games nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels counter
 
 {-
 dup the chatChannel
