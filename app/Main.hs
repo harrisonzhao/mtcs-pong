@@ -1,9 +1,10 @@
-{-# LANGUAGE QuasiQuotes, TemplateHaskell, TypeFamilies, OverloadedStrings, DeriveGeneric #-}
+{-# LANGUAGE EmptyDataDecls, FlexibleContexts, GADTs, GeneralizedNewtypeDeriving, MultiParamTypeClasses, ViewPatterns, TypeSynonymInstances, QuasiQuotes, TemplateHaskell, TypeFamilies, OverloadedStrings, DeriveGeneric #-}
 module Main where
 
 import Yesod.Core
 import Yesod.WebSockets
 import Yesod.Form
+import Yesod.Persist
 import Conduit
 import Control.Monad
 import Control.Concurrent.Chan
@@ -20,6 +21,17 @@ import qualified Data.Set as Set
 import Data.Text (Text, isPrefixOf, splitOn, unpack, pack, concat)
 import Data.String 
 import qualified Data.Text as L
+
+import Yesod.Form.Jquery
+import Data.Text (Text)
+import Database.Persist
+--import Database.Persist.Sqlite
+import Database.Persist.Sql
+import Database.Persist.TH
+import Control.Monad.Trans.Resource (runResourceT)
+import Control.Monad.Logger (runStderrLoggingT)
+import Control.Monad.Reader
+import qualified Data.Conduit.List as CL
 
 import Messages
 import Game
@@ -41,12 +53,72 @@ data Pong = Pong {
     counter :: TVar Int
 }
 
-instance Yesod Pong
-
-mkYesod "Pong" [parseRoutes|
-/       LoginR GET POST
-/lobby  LobbyR GET
+-- Define our entities as usual
+share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
+Person
+ fullname String
+ username String
+ UsernameKey username
+ password String
+ gamespl Int
+ win Int
+ loss Int
+    deriving Show
 |]
+
+-- We keep our connection pool in the foundation. At program initialization, we
+-- create our initial pool, and each time we need to perform an action we check
+-- out a single connection from the pool.
+--data Pong = Pong ConnectionPool
+
+-- We'll create a single route, to access a person. It's a very common
+-- occurrence to use an Id type in routes.
+mkYesod "Pong" [parseRoutes|
+/register RegisterR GET
+/registered AccRegisterR POST
+/login   LoginR GET POST
+/lobby   LobbyR GET
+|]
+
+-- Nothing special here
+instance Yesod Pong
+-- Now we need to define a YesodPersist instance, which will keep track of
+-- which backend we're using and how to run an action.
+
+instance YesodJquery Pong
+
+instance RenderMessage Pong FormMessage where
+    renderMessage _ _ = defaultFormMessage
+
+--instance YesodPersist Pong where
+--    type YesodPersistBackend Pong = SqlBackend
+--    runDB action = do
+--        Pong pool <- getYesod
+--        runSqlPool action pool
+
+data User = User
+    { username      :: Text
+    , password      :: Text
+    }
+  deriving Show
+
+data NewPerson = NewPerson
+    { newUsername         :: Text
+    , newPassword         :: Text
+    , confirmPassword     :: Text
+    }
+  deriving Show
+
+userForm :: Html -> MForm Handler (FormResult User, Widget)
+userForm = renderDivs $ User
+    <$> areq textField     "Username: " Nothing
+    <*> areq passwordField "Password: " Nothing
+
+newAccountForm :: Html -> MForm Handler (FormResult NewPerson, Widget)
+newAccountForm = renderDivs $ NewPerson
+    <$> areq textField     "Username: " Nothing
+    <*> areq passwordField "Password: " Nothing
+    <*> areq passwordField "Confirm: " Nothing
 
 _GAME_TICK_DELAY = 1000000
 
@@ -231,6 +303,7 @@ appHandler = do
     gameChannel <- liftIO $ newIORef Nothing
     
     --instead of using counter, should just get last session popped onto the sessionMap
+    liftIO $ print $ Map.toList sess
     counterNum <- liftIO $ readTVarIO (counter app)
     username <- lookupSession $ pack $ show counterNum
     liftIO $ atomically $ modifyTVar (usersOnline app) (\s -> Set.insert (unpack (fromJust username)) s)
@@ -245,32 +318,55 @@ appHandler = do
         (msgs $$ sinkWSText)
         (sourceWS $$ mapM_C msgHandler)
 
+
 getLoginR :: Handler Html
 getLoginR = do
-    sess <- getSession
+    (widget, enctype) <- generateFormPost userForm
+    --people <- runDB $ selectList [] [Asc PersonWin]
     defaultLayout
         [whamlet|
-            <form method=post>
-                <input type=text name=key>
-                <input type=text name=val>
-                <input type=submit>
-            <h1>
+            <h1>Login to Pong Web App</h1>
+            <a href=@{RegisterR}>Click to register for an acount!
+            <p>
+                Login with your username and password.
+                <form method=post action=@{LoginR} enctype=#{enctype}>
+                    ^{widget}
+                    <button>Login
         |]
 
-postLoginR :: Handler ()
+
+postLoginR :: Handler Html
 postLoginR = do
-    sess <- getSession
-    setSession "0" "sheryan"
-    setSession "1" "harrison"
-    setSession "2" "eugene"
-    setSession "3" "miraj"
-    --(key, mval) <- runInputPost $ (,) <$> ireq textField "key" <*> iopt textField "val"
-    --case mval of
-    --    Nothing -> deleteSession key
-    --    Just val -> setSession key val
-    --liftIO $ print (key, mval)
-    --msg <- runInputPost $ ireq textField "key"
-    redirect LobbyR
+    ((result, widget), enctype) <- runFormPost userForm
+    case result of
+--      FormSuccess user -> defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
+        FormSuccess user -> do
+            let postedUsername = (username user)
+            let postedPassword = (password user)
+            --authResult <- getUser postedUsername postedPassword
+            setSession postedUsername postedPassword
+            redirect LobbyR
+        --Sheryan
+        --setSession "0" "sheryan"
+        --setSession "1" "harrison"
+        --setSession "2" "eugene"
+        --setSession "3" "miraj"
+        --(key, mval) <- runInputPost $ (,) <$> ireq textField "key" <*> iopt textField "val"
+        --case mval of
+        --    Nothing -> deleteSession key
+        --    Just val -> setSession key val
+        --liftIO $ print (key, mval)
+        --msg <- runInputPost $ ireq textField "key"
+        -- Miraj
+        --defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
+        _ -> defaultLayout
+            [whamlet|
+                <h1>Uh oh, something went wrong with the Login POST request.</h1>
+                <p>Invalid input, let's try again.
+                <form method=post action=@{LoginR} enctype=#{enctype}>
+                    ^{widget}
+                    <button>LoginAttempt2
+            |]
 
 getLobbyR :: Handler Html
 getLobbyR = do
@@ -320,6 +416,38 @@ getLobbyR = do
                 e.preventDefault();
             });
         |]
+
+--getPersonR :: PersonId -> Handler String
+--getPersonR personId = do
+ --   person <- runDB $ get404 personId
+ --   return $ show person
+
+getRegisterR :: Handler Html
+getRegisterR = do
+    -- Generate the form to be displayed
+    (widget, enctype) <- generateFormPost newAccountForm
+    defaultLayout
+        [whamlet|
+            <h1>Register to Pong Web App</h1>
+            <form method=post action=@{AccRegisterR} enctype=#{enctype}>
+                ^{widget}
+                <button>Register
+        |]
+
+postAccRegisterR :: Handler Html
+postAccRegisterR = do
+    ((result, widget), enctype) <- runFormPost newAccountForm
+    case result of
+        FormSuccess newPerson -> defaultLayout [whamlet|<p>Register Result:<p>#{show newPerson}|]
+--createNew "name" (username newPerson) (password newPerson)
+        _ -> defaultLayout
+            [whamlet|
+                <h1>Uh oh, something went wrong with the Registration POST request.</h1>
+                <p>Invalid input, let's try again.
+                <form method=post action=@{AccRegisterR} enctype=#{enctype}>
+                    ^{widget}
+                    <button>RegisterAttempt2
+            |]
 
 main :: IO ()
 main = do
