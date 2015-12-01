@@ -22,8 +22,7 @@ import Data.String
 import qualified Data.Text as L
 
 import Messages
-import Game 
-import Game (Direction)
+import Game
 
 data Pong = Pong {
     games :: TVar [IO Game],
@@ -65,7 +64,9 @@ updateGame game = (tick game) >>= \g -> do
 
 updateGames :: TVar [IO Game] -> IO ()
 updateGames games = forever $ do
-    atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) gs)
+    --atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) gs)
+    gs <- readTVarIO games
+    mapM_ (\iog -> iog >>= (\g -> atomically $ writeTChan (gameChan g) (newChatMsg "in game now bitches"))) gs
     threadDelay _GAME_TICK_DELAY
 
 createGame :: Pong -> String -> String -> IO ()
@@ -93,6 +94,8 @@ joinGame username gameCh app = do
                     ch <- (fromJust game) >>= (\g -> return (gameChan g))
                     duppedCh <- atomically $ dupTChan ch
                     modifyIORef gameCh (\_ -> Just duppedCh)
+                    putStr $ "channel successfully dupped for "
+                    atomically $ writeTChan ch $ newChatMsg $ pack username
                 else return ()
         else return ()
 
@@ -118,17 +121,27 @@ msgSource :: MonadIO m => String -> IORef (Maybe (TChan Message)) -> TChan Messa
 msgSource username gameChan chatChan = forever $ do
     maybeGameChan <- liftIO $ readIORef gameChan
     let isInGame = not $ isNothing maybeGameChan
+    liftIO $ print "========ISINGAME======="
+    liftIO $ print isInGame
+    liftIO $ putStr " FOR "
+    liftIO $ print username
+    liftIO $ print "========ISINGAME======="
     msg <- liftIO $ if isInGame
         then atomically $ (readTChan $ fromJust maybeGameChan) `orElse` (readTChan chatChan)
         else atomically $ readTChan chatChan
+    liftIO $ print "========THE_MSG======="
+    liftIO $ print msg
+    liftIO $ putStr " FOR "
+    liftIO $ print username
+    liftIO $ print "========THE_MSG======="
     if ((msgType msg) == ChallengeMsg)
         then do
             let challenge = decode $ encode $ msgData msg :: Maybe Challenge
-            if ((isJust challenge) && ((challenged (fromJust challenge)) == username))
+            if ((isJust challenge) && ((challenged (fromJust challenge)) == (pack username)))
                 then yieldMsg msg
                 else yield empty
         else yieldMsg msg
-  where yieldMsg msg = yield $ toStrict $ encode $ msgData msg
+  where yieldMsg msg = yield $ toStrict $ encode $ msg
     
 handleChat app msg = do 
     liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg msg
@@ -150,7 +163,7 @@ handleMove app player direction = do
     
 handleChallenge app player1 player2 = do
     liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.insert (unpack player2) (unpack player1) s)
-    liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg $ L.concat [player1, " ",player2]
+    liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeMsg (toJSON $ (Challenge player1 player2))
     
 handleAccept app acceptingPlayer = do
     let acceptingPlayerU = unpack acceptingPlayer
@@ -174,7 +187,9 @@ handleAccept app acceptingPlayer = do
             gamesLength <- liftIO $ readTVarIO (nextGameId app)
             let game = liftIO $ fromJust $ getGame currentGameId gamesLength (games app)
             ch <-  game >>= (\g -> return (gameChan g))
-            liftIO $ atomically $ writeTChan ch $ newChatMsg "you can proceed to the game!"
+            liftIO $ print "game should be okay"
+            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "you can proceed to the game!"
+            game >>= (\g -> liftIO $ atomically $ writeTChan (gameChan g) $ newChatMsg "kfljdaslkfjaslkdjfa")
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "aceppted a nonexisting challenge"
     
@@ -198,7 +213,8 @@ handleMsg app msg = do
         "accept" -> 
             handleAccept app (msgParsed !! 1)
         "leave" -> 
-            handleLeave app msg 
+            handleLeave app msg
+        -- setReady (make sure you replace the game)
         _ -> 
             handleOther app msg
     mySet <- liftIO $ readTVarIO (usersOnline app)
@@ -315,7 +331,8 @@ main = do
     challengedToChallenger <- newTVarIO (Map.empty)
     usersOnline <- newTVarIO (Set.empty)
     userGameChannels <- newTVarIO (Map.empty)
-    forkIO $ updateGames games 
+    print $ encode $ toJSON $ newChatMsg "hello world"
+    forkIO $ updateGames games
     warp 3000 $ Pong games nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels counter
 
 {-

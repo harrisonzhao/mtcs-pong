@@ -8,11 +8,12 @@ import GHC.Generics
 data MessageType = GameStatusMsg
                  | GameStateMsg
                  | ChatMsg
-                 | ChallengeMsg deriving (Eq, Show)
+                 | ChallengeMsg deriving (Eq, Show, Generic)
+instance ToJSON MessageType
 
 data Challenge = Challenge {
-    challenger :: String,
-    challenged :: String
+    challenger :: Text,
+    challenged :: Text
 } deriving (Show, Generic)
 instance ToJSON Challenge
 instance FromJSON Challenge
@@ -24,6 +25,7 @@ data Message = Message {
     msgType :: MessageType,
     msgData :: Value
 } deriving (Show, Generic)
+instance ToJSON Message
 
 newMessage :: MessageType -> Value -> Message
 newMessage mType mData =

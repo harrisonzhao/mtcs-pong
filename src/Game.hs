@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric, OverloadedStrings #-}
 module Game
     ( Game
     , printGame
@@ -33,6 +33,9 @@ import Data.Maybe
 import Data.ByteString
 import Control.Concurrent.STM
 import GHC.Generics
+
+import Control.Concurrent (threadDelay, forkIO)
+import Control.Monad
 
 printGame :: Game -> IO ()
 printGame game = do
@@ -157,6 +160,9 @@ initState =
 initGame :: String -> String -> IO Game
 initGame lPlayerName rPlayerName = do
     gameChan <- newBroadcastTChanIO
+    forkIO $ forever $ do
+        atomically $ writeTChan gameChan $ newChatMsg "hello game"
+        threadDelay 5000000
     return Game { gameStatus = Initial
                 , lPlayer = lPlayerName
                 , rPlayer = rPlayerName
