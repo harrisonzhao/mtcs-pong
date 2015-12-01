@@ -31,6 +31,7 @@ import Database.Persist.TH
 import Control.Monad.Trans.Resource (runResourceT)
 import Control.Monad.Logger (runStderrLoggingT)
 import Control.Monad.Reader
+import Control.Lens
 import qualified Data.Conduit.List as CL
 
 import Messages
@@ -124,21 +125,25 @@ _GAME_TICK_DELAY = 1000000
 
 updateGame :: Game -> IO Game
 updateGame game = (tick game) >>= \g -> do
+    print "im called update"
     if needsLogging g
         then do
+            print "needs logging"
             let maybeWinLosePair = getWinLose g
             -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
             -- update database maybe in a different thread that kills itself
             -- maybe pass along the gameChan so a db updated message can also be seen by users
             -- in order for users to be updated, another message type would be needed
             setCompleted g
-        else return g
+        else do 
+            print "doesnt need logging" 
+            return g
 
 updateGames :: TVar [IO Game] -> IO ()
 updateGames games = forever $ do
-    --atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) gs)
     gs <- readTVarIO games
     mapM_ (\iog -> iog >>= (\g -> atomically $ writeTChan (gameChan g) (newChatMsg "in game now bitches"))) gs
+--    atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) gs)
     threadDelay _GAME_TICK_DELAY
 
 createGame :: Pong -> String -> String -> IO ()
@@ -167,7 +172,7 @@ joinGame username gameCh app = do
                     duppedCh <- atomically $ dupTChan ch
                     modifyIORef gameCh (\_ -> Just duppedCh)
                     putStr $ "channel successfully dupped for "
-                    atomically $ writeTChan ch $ newChatMsg $ pack username
+                    atomically $ writeTChan ch $ newChatMsg $ "Pop Up Ready"
                 else return ()
         else return ()
 
@@ -261,13 +266,28 @@ handleAccept app acceptingPlayer = do
             ch <-  game >>= (\g -> return (gameChan g))
             liftIO $ print "game should be okay"
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "you can proceed to the game!"
-            game >>= (\g -> liftIO $ atomically $ writeTChan (gameChan g) $ newChatMsg "kfljdaslkfjaslkdjfa")
         else
-            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "aceppted a nonexisting challenge"
+            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "accepted a nonexisting challenge"
     
 handleLeave app msg = do
     --need to actually implement this
     liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "leave"
+
+handleReady app player = do
+    let pid = unpack player 
+    myMap <- liftIO $ readTVarIO (userToGameId app)
+    let gameId = Map.lookup pid myMap
+    if isJust gameId
+        then do
+            gamesLength <- liftIO $ readTVarIO (nextGameId app)
+            game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
+            liftIO $ print (gameStatus game)
+            let newGame = liftIO $ setReady game pid
+            liftIO $ atomically $ modifyTVar (games app) (\gs -> set (element  (fromJust gameId)) (newGame) gs)
+            game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
+            liftIO $ print (gameStatus game)
+        else
+            return ()
 
 handleOther app msg = do
     liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg ""
@@ -286,7 +306,8 @@ handleMsg app msg = do
             handleAccept app (msgParsed !! 1)
         "leave" -> 
             handleLeave app msg
-        -- setReady (make sure you replace the game)
+        "ready" ->
+            handleReady app (msgParsed !! 1)
         _ -> 
             handleOther app msg
     mySet <- liftIO $ readTVarIO (usersOnline app)
@@ -344,14 +365,14 @@ postLoginR = do
             let postedUsername = (username user)
             let postedPassword = (password user)
             --authResult <- getUser postedUsername postedPassword
-            setSession postedUsername postedPassword
+            setSession "0" "sheryan"
+            setSession "1" "harrison"
+            setSession "2" "eugene"
+            setSession "3" "miraj"
+            --(key, mval) <- runInputPost $ (,) <$> ireq textField "key" <*> iopt textField "val"
+            --setSession postedUsername postedPassword
             redirect LobbyR
         --Sheryan
-        --setSession "0" "sheryan"
-        --setSession "1" "harrison"
-        --setSession "2" "eugene"
-        --setSession "3" "miraj"
-        --(key, mval) <- runInputPost $ (,) <$> ireq textField "key" <*> iopt textField "val"
         --case mval of
         --    Nothing -> deleteSession key
         --    Just val -> setSession key val

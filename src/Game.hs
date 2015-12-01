@@ -162,7 +162,7 @@ initGame lPlayerName rPlayerName = do
     gameChan <- newBroadcastTChanIO
     forkIO $ forever $ do
         atomically $ writeTChan gameChan $ newChatMsg "hello game"
-        threadDelay 5000000
+        threadDelay 1000000
     return Game { gameStatus = Initial
                 , lPlayer = lPlayerName
                 , rPlayer = rPlayerName
@@ -218,12 +218,15 @@ functions for externally updating game state
 -}
 tick :: Game -> IO Game
 tick game = do
+    print (gameStatus game)
+    print "jawdoiwajoidjw"
     if (gameStatus game) /= Playing
         then return game
         else tick' game
 
 tick' :: Game -> IO Game
 tick' game = do 
+    print "hello"
     let state' = update state
     if lPoints == _MAX_SCORE || rPoints == _MAX_SCORE
         then do
