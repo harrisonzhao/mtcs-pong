@@ -1,13 +1,18 @@
 {-# LANGUAGE DeriveGeneric #-}
 module Messages where
 
+import Data.Set as Set
 import Data.Aeson
 import Data.Text
 import GHC.Generics
 
 data MessageType = GameMsg
                  | ChatMsg
-                 | ChallengeMsg deriving (Eq, Show, Generic)
+                 | ChallengeMsg
+                 | ReadyMsg
+                 | UsersOnlineMsg
+                 | UsersInGameMsg 
+                 | ChallengeExpMsg deriving (Eq, Show, Generic)
 instance ToJSON MessageType
 
 data Challenge = Challenge {
@@ -16,6 +21,36 @@ data Challenge = Challenge {
 } deriving (Show, Generic)
 instance ToJSON Challenge
 instance FromJSON Challenge
+
+data ChallengeExp = ChallengeExp {
+    acceptingPlayer :: Text
+} deriving (Show, Generic)
+instance ToJSON ChallengeExp
+instance FromJSON ChallengeExp
+
+data Ready = Ready {
+}deriving (Show, Generic)
+instance ToJSON Ready
+instance FromJSON Ready
+
+data Chat = Chat{
+    fromUser :: Text,
+    chatData :: Text
+}deriving (Show, Generic)
+instance ToJSON Chat
+instance FromJSON Chat
+
+data UsersInGame = UsersInGame{
+    usersIG :: [String]
+}deriving (Show, Generic)
+instance ToJSON UsersInGame
+instance FromJSON UsersInGame
+
+data UsersOnline = UsersOnline{
+    usersOL :: Set.Set String
+}deriving (Show, Generic)
+instance ToJSON UsersOnline
+instance FromJSON UsersOnline
 
 newChatMsg :: Text -> Message
 newChatMsg msg = newMessage ChatMsg (toJSON msg)

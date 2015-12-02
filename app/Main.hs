@@ -49,9 +49,7 @@ data Pong = Pong {
     --mapping for users online, checked if send challenge
     usersOnline :: TVar (Set.Set String),
     --map for user to IORef to game channel
-    userGameChannels :: TVar (Map.Map String (IORef (Maybe (TChan Message)))),
-
-    counter :: TVar Int
+    userGameChannels :: TVar (Map.Map String (IORef (Maybe (TChan Message))))
 }
 
 -- Define our entities as usual
@@ -78,7 +76,7 @@ mkYesod "Pong" [parseRoutes|
 /register RegisterR GET
 /registered AccRegisterR POST
 /login   LoginR GET POST
-/lobby   LobbyR GET
+/lobby/#String   LobbyR GET
 |]
 
 -- Nothing special here
@@ -201,7 +199,7 @@ joinGame username app = do
                     duppedCh <- atomically $ dupTChan ch
                     modifyIORef gameCh (\_ -> Just duppedCh)
                     putStr $ "channel successfully duped for "
-                    atomically $ writeTChan ch $ newChatMsg $ "Pop Up Ready"
+                    atomically $ writeTChan ch $ newMessage ReadyMsg (toJSON Ready)
                 else return ()
         else return ()
 
@@ -249,8 +247,8 @@ msgSource username gameChan chatChan = forever $ do
         else yieldMsg msg
   where yieldMsg msg = yield $ toStrict $ encode $ msg
     
-handleChat app msg = do 
-    liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg msg
+handleChat app fromPlayer msg = do 
+    liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChatMsg (toJSON $ (Chat fromPlayer msg))
 
 moveGamePaddle' :: [IO (Game, TChan Message)] -> Int -> String -> Direction -> [IO (Game, TChan Message)]
 moveGamePaddle' games gid username direction = do
@@ -302,6 +300,9 @@ handleAccept app acceptingPlayer = do
             liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.delete acceptingPlayerU s) 
             liftIO $ createGame app challengingPlayer acceptingPlayerU
 
+            userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
+
             --liftIO $ joinGame challengingPlayer app 
             --liftIO $ joinGame acceptingPlayerU app
 
@@ -310,10 +311,9 @@ handleAccept app acceptingPlayer = do
             --let game = fst gameAndGameChan
             --let ch = snd gameAndGameChan
 
-            liftIO $ print "game should be okay"
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "you can proceed to the game!"
         else
-            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "accepted a nonexisting challenge"
+            liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeExpMsg (toJSON $ (ChallengeExp acceptingPlayer))
     
 handleLeave app msg = do
     --need to actually implement this
@@ -354,7 +354,7 @@ handleMsg app msg = do
     let msgType = msgParsed !! 0
     case msgType of 
         "chat" -> 
-            handleChat app msg 
+            handleChat app (msgParsed !! 1) (msgParsed !! 2)  
         "move" -> 
             handleMove app (msgParsed !! 1) (msgParsed !! 2) 
         "challenge" -> 
@@ -374,24 +374,19 @@ handleMsg app msg = do
     myMap2 <- liftIO $ readTVarIO (challengedToChallenger app)
     liftIO $ print $ Map.toList myMap2
     
-appHandler :: WebSocketsT Handler ()
-appHandler = do
-    sess <- getSession
+appHandler :: String -> WebSocketsT Handler ()
+appHandler username = do
     app <- getYesod
     gameChannel <- liftIO $ newIORef Nothing
     
-    --instead of using counter, should just get last session popped onto the sessionMap
-    liftIO $ print $ Map.toList sess
-    counterNum <- liftIO $ readTVarIO (counter app)
-    username <- lookupSession $ pack $ show counterNum
-    liftIO $ atomically $ modifyTVar (usersOnline app) (\s -> Set.insert (unpack (fromJust username)) s)
+    liftIO $ atomically $ modifyTVar (usersOnline app) (\s -> Set.insert username s)
 
-    liftIO $ atomically $ modifyTVar (counter app) (\n -> n + 1)
-
-    liftIO $ atomically $ modifyTVar (userGameChannels app) (\s -> Map.insert (unpack (fromJust username)) gameChannel s)
+    liftIO $ atomically $ modifyTVar (userGameChannels app) (\s -> Map.insert username gameChannel s)
     chatChannel <- liftIO $ atomically $ dupTChan (chatChan app)
-    let msgs = msgSource ( unpack (fromJust username)) gameChannel chatChannel
+    let msgs = msgSource username gameChannel chatChannel
     let msgHandler = handleMsg app
+    usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
+    liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
     race_
         (msgs $$ sinkWSText)
         (sourceWS $$ mapM_C msgHandler)
@@ -421,20 +416,7 @@ postLoginR = do
         FormSuccess user -> do
             let postedUsername = (username user)
             let postedPassword = (password user)
-            --authResult <- getUser postedUsername postedPassword
-            setSession "0" "sheryan"
-            setSession "1" "harrison"
-            setSession "2" "eugene"
-            setSession "3" "miraj"
-            --(key, mval) <- runInputPost $ (,) <$> ireq textField "key" <*> iopt textField "val"
-            --setSession postedUsername postedPassword
-            redirect LobbyR
-        --Sheryan
-        --case mval of
-        --    Nothing -> deleteSession key
-        --    Just val -> setSession key val
-        --liftIO $ print (key, mval)
-        --msg <- runInputPost $ ireq textField "key"
+            redirect (LobbyR $ unpack postedUsername)
         -- Miraj
         --defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
         _ -> defaultLayout
@@ -446,9 +428,9 @@ postLoginR = do
                     <button>LoginAttempt2
             |]
 
-getLobbyR :: Handler Html
-getLobbyR = do
-    webSockets appHandler
+getLobbyR :: String -> Handler Html
+getLobbyR username = do
+    webSockets (appHandler username)
     defaultLayout $ do
         [whamlet|
             <div #output>
@@ -516,7 +498,9 @@ postAccRegisterR :: Handler Html
 postAccRegisterR = do
     ((result, widget), enctype) <- runFormPost newAccountForm
     case result of
-        FormSuccess newPerson -> defaultLayout [whamlet|<p>Register Result:<p>#{show newPerson}|]
+        FormSuccess newPerson -> do 
+            defaultLayout [whamlet|<p>Register Result:<p>#{show newPerson}|]
+            redirect LoginR
 --createNew "name" (username newPerson) (password newPerson)
         _ -> defaultLayout
             [whamlet|
@@ -531,7 +515,6 @@ main :: IO ()
 main = do
     games <- newTVarIO ([] :: [IO (Game, TChan Message)])
     nextGameId <- newTVarIO (0 :: Int)
-    counter <- newTVarIO (0 :: Int)
     chatChan <- atomically newBroadcastTChan
     userToGameId <- newTVarIO (Map.empty)
     challengedToChallenger <- newTVarIO (Map.empty)
@@ -539,42 +522,4 @@ main = do
     userGameChannels <- newTVarIO (Map.empty)
     print $ encode $ toJSON $ newChatMsg "hello world"
     forkIO $ updateGames games
-    warp 3000 $ Pong games nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels counter
-
-{-
-dup the chatChannel
-
-forever
-a) read from chat channel or from game channel (if there is a game channel)
-    -- if there is a challenge to the user send it through otherwise filter it out
-b) read from the websocket
-    -- process message 
--}
-
-
-
---General Flow of Game Updates
-{-
-
-need to filter outgoing messages by user string, simple compare if directed message or not
-(challenge and initial game if challenge accepted)
-
-createGame :: lPlayer -> rPlayer -> IO ()
-    creates game and puts it in games list
-    sends a message to both players along with the game
-
-leaveGame :: IO ()
-
-daemon for handling game ticks
-    pass around the TVar for games
-
-user registration login logout
-
-handlers for:
-    chat
-    challenge (first word of chat should be /challenge)
-    accept challenge
-    get rating
-    move paddle
-    handle ready
--}
+    warp 3000 $ Pong games nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels
