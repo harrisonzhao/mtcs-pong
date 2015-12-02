@@ -387,6 +387,8 @@ appHandler username = do
     let msgHandler = handleMsg app
     usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
     liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
+    userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
+    liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
     race_
         (msgs $$ sinkWSText)
         (sourceWS $$ mapM_C msgHandler)
@@ -432,6 +434,7 @@ getLobbyR :: String -> Handler Html
 getLobbyR username = do
     webSockets (appHandler username)
     defaultLayout $ do
+        addScriptRemote "https://ajax.googleapis.com/ajax/libs/jquery/1.7.0/jquery.js"
         [whamlet|
             <div #output>
             <form #form>
