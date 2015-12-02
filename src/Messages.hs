@@ -5,8 +5,7 @@ import Data.Aeson
 import Data.Text
 import GHC.Generics
 
-data MessageType = GameStatusMsg
-                 | GameStateMsg
+data MessageType = GameMsg
                  | ChatMsg
                  | ChallengeMsg deriving (Eq, Show, Generic)
 instance ToJSON MessageType

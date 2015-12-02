@@ -38,7 +38,7 @@ import Messages
 import Game
 
 data Pong = Pong {
-    games :: TVar [IO Game],
+    games :: TVar [IO (Game, TChan Message)],
     nextGameId :: TVar Int,
     --chatChan can send chat and challenges
     chatChan :: TChan Message,
@@ -70,7 +70,7 @@ Person
 -- We keep our connection pool in the foundation. At program initialization, we
 -- create our initial pool, and each time we need to perform an action we check
 -- out a single connection from the pool.
---data Pong = Pong ConnectionPool
+-- data Pong = Pong ConnectionPool
 
 -- We'll create a single route, to access a person. It's a very common
 -- occurrence to use an Id type in routes.
@@ -121,57 +121,86 @@ newAccountForm = renderDivs $ NewPerson
     <*> areq passwordField "Password: " Nothing
     <*> areq passwordField "Confirm: " Nothing
 
-_GAME_TICK_DELAY = 1000000
+_GAME_TICK_DELAY = 3000000
 
-updateGame :: Game -> IO Game
-updateGame game = (tick game) >>= \g -> do
-    print "im called update"
-    if needsLogging g
+--updateGame :: Game -> IO (Game)
+--updateGame game = (tick game) >>= \g -> do
+--    print "im called update"
+--    if needsLogging g
+--        then do
+--            print "needs logging"
+--            let maybeWinLosePair = getWinLose g
+--            -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
+--            -- update database maybe in a different thread that kills itself
+--            -- maybe pass along the gameChan so a db updated message can also be seen by users
+--            -- in order for users to be updated, another message type would be needed
+--            setCompleted g
+--        else do 
+--            print "doesnt need logging" 
+--            return g
+
+--updateGames :: TVar [IO Game] -> IO ()
+--updateGames games = forever $ do
+--    gs <- readTVarIO games
+--    mapM_ (\iog -> iog >>= (\g -> do
+--        ch <- readIORef (gameChan g)
+--        atomically $ writeTChan ch (newChatMsg "in game now bitches"))) gs
+--    atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) gs)
+--    threadDelay _GAME_TICK_DELAY
+
+updateGame :: IO (Game, TChan Message) -> IO (Game, TChan Message)
+updateGame gameAndGameChan = do
+    pair <- gameAndGameChan
+    let game = tick (fst pair)
+    let chan = snd pair
+    printGame game
+    atomically $ writeTChan chan (getGameMsg game)
+    if (needsLogging game)
         then do
             print "needs logging"
-            let maybeWinLosePair = getWinLose g
+            let maybeWinLosePair = getWinLose game
             -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
             -- update database maybe in a different thread that kills itself
             -- maybe pass along the gameChan so a db updated message can also be seen by users
             -- in order for users to be updated, another message type would be needed
-            setCompleted g
-        else do 
-            print "doesnt need logging" 
-            return g
+            let game' = setCompleted game
+            return (game', chan)
+        else do
+            print "doesn't need logging"
+            return (game, chan)
 
-updateGames :: TVar [IO Game] -> IO ()
+updateGames :: TVar [IO (Game, TChan Message)] -> IO ()
 updateGames games = forever $ do
     gs <- readTVarIO games
-    mapM_ (\iog -> iog >>= (\g -> atomically $ writeTChan (gameChan g) (newChatMsg "in game now bitches"))) gs
---    atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) gs)
+    mapM_ (\iog -> iog >>= (\p -> do
+        let ch = snd p
+        atomically $ writeTChan ch (newChatMsg "in game now bitches"))) gs
+    print $ length gs
+    atomically $ modifyTVar games (\gs -> map (\pair -> updateGame pair) gs)
     threadDelay _GAME_TICK_DELAY
-
-createGame :: Pong -> String -> String -> IO ()
-createGame app lPlayer rPlayer = do
-    atomically $ do
-        currentGameId <- readTVar (nextGameId app)
-        modifyTVar (nextGameId app) (\n -> n + 1)
-        modifyTVar (games app) (\gs -> gs ++ [(initGame lPlayer rPlayer)])
-        modifyTVar (userToGameId app) (\mapping -> Map.insert lPlayer currentGameId mapping)
-        modifyTVar (userToGameId app) (\mapping -> Map.insert rPlayer currentGameId mapping)
 
 -- call this function to make a given user join a game
 -- it duplicates the games channel into the user's game channel IORef
 -- gameChannel is the user's gameChannel IORef, which is created in appHandler
-joinGame :: String -> IORef (Maybe (TChan Message)) -> Pong -> IO ()
-joinGame username gameCh app = do
+joinGame :: String -> Pong -> IO ()
+joinGame username app = do
     gamesLength <- readTVarIO (nextGameId app)
     userGameIdMap <- readTVarIO (userToGameId app)
+    userGameChannels <- readTVarIO (userGameChannels app)
+    let maybeGameChan = Map.lookup username userGameChannels
     let gameId = Map.lookup username userGameIdMap
-    if (isJust gameId)
+    if (isJust gameId && isJust maybeGameChan)
         then do
-            let game = getGame (fromJust gameId) gamesLength (games app)
-            if (isJust game)
+            let gameAndGameChan = getGame (fromJust gameId) gamesLength (games app)
+            if (isJust gameAndGameChan)
                 then do
-                    ch <- (fromJust game) >>= (\g -> return (gameChan g))
+                    pair <- fromJust gameAndGameChan
+                    let ch = snd pair
+                    let gameCh = fromJust maybeGameChan
+                    --ch <- (fromJust game) >>= (\g -> readIORef (gameChan g))
                     duppedCh <- atomically $ dupTChan ch
                     modifyIORef gameCh (\_ -> Just duppedCh)
-                    putStr $ "channel successfully dupped for "
+                    putStr $ "channel successfully duped for "
                     atomically $ writeTChan ch $ newChatMsg $ "Pop Up Ready"
                 else return ()
         else return ()
@@ -181,7 +210,7 @@ leaveGame :: IORef (Maybe (TChan Message)) -> IO ()
 leaveGame gameChannel = do
     modifyIORef gameChannel (\_ -> Nothing)
 
-getGame :: Int -> Int -> TVar [IO Game] -> Maybe (IO Game)
+getGame :: Int -> Int -> TVar [IO (Game, TChan Message)] -> Maybe (IO (Game, TChan Message))
 getGame id gamesLength games = do
     if id < gamesLength
         then Just $ (readTVarIO games) >>= (\games -> games !! id) 
@@ -198,19 +227,19 @@ msgSource :: MonadIO m => String -> IORef (Maybe (TChan Message)) -> TChan Messa
 msgSource username gameChan chatChan = forever $ do
     maybeGameChan <- liftIO $ readIORef gameChan
     let isInGame = not $ isNothing maybeGameChan
-    liftIO $ print "========ISINGAME======="
-    liftIO $ print isInGame
-    liftIO $ putStr " FOR "
-    liftIO $ print username
-    liftIO $ print "========ISINGAME======="
+    --liftIO $ print "========ISINGAME======="
+    --liftIO $ print isInGame
+    --liftIO $ putStr " FOR "
+    --liftIO $ print username
+    --liftIO $ print "========ISINGAME======="
     msg <- liftIO $ if isInGame
         then atomically $ (readTChan $ fromJust maybeGameChan) `orElse` (readTChan chatChan)
         else atomically $ readTChan chatChan
-    liftIO $ print "========THE_MSG======="
-    liftIO $ print msg
-    liftIO $ putStr " FOR "
-    liftIO $ print username
-    liftIO $ print "========THE_MSG======="
+    --liftIO $ print "========THE_MSG======="
+    --liftIO $ print msg
+    --liftIO $ putStr " FOR "
+    --liftIO $ print username
+    --liftIO $ print "========THE_MSG======="
     if ((msgType msg) == ChallengeMsg)
         then do
             let challenge = decode $ encode $ msgData msg :: Maybe Challenge
@@ -223,17 +252,25 @@ msgSource username gameChan chatChan = forever $ do
 handleChat app msg = do 
     liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg msg
 
+moveGamePaddle' :: [IO (Game, TChan Message)] -> Int -> String -> Direction -> [IO (Game, TChan Message)]
+moveGamePaddle' games gid username direction = do
+    let replaceOp = (\gameAndGameChan -> gameAndGameChan >>= (\pair -> return ((movePaddle (fst pair) username direction), snd pair)))
+    replace' gid replaceOp games
+
+moveGamePaddle :: TVar [IO (Game, TChan Message)] -> Int -> String -> Direction -> IO ()
+moveGamePaddle games gid username direction = do
+    atomically $ modifyTVar games (\gs -> moveGamePaddle' gs gid username direction)
+
 handleMove app player direction = do
     let pid = unpack player 
     myMap <- liftIO $ readTVarIO (userToGameId app)
     let gameId = Map.lookup pid myMap
     if isJust gameId
         then do
-            gamesLength <- liftIO $ readTVarIO (nextGameId app)
-            game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
+            let gid = fromJust gameId
             case direction of
-                "up" -> liftIO $ movePaddle game pid Up
-                "down" -> liftIO $ movePaddle game pid Down
+                "up" -> liftIO $ moveGamePaddle (games app) gid pid Up
+                "down" -> liftIO $ moveGamePaddle (games app) gid pid Down
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
@@ -241,29 +278,38 @@ handleMove app player direction = do
 handleChallenge app player1 player2 = do
     liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.insert (unpack player2) (unpack player1) s)
     liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeMsg (toJSON $ (Challenge player1 player2))
-    
+
+createGame :: Pong -> String -> String -> IO ()
+createGame app lPlayer rPlayer = do
+    atomically $ do
+        currentGameId <- readTVar (nextGameId app)
+        modifyTVar (nextGameId app) (\n -> n + 1)
+        chan <- newBroadcastTChan
+        modifyTVar (games app) (\gs -> gs ++ [return (initGame lPlayer rPlayer, chan)])
+        modifyTVar (userToGameId app) (\mapping -> Map.insert lPlayer currentGameId mapping)
+        modifyTVar (userToGameId app) (\mapping -> Map.insert rPlayer currentGameId mapping)
+    joinGame lPlayer app
+    joinGame rPlayer app
+
 handleAccept app acceptingPlayer = do
     let acceptingPlayerU = unpack acceptingPlayer
     myMap <- liftIO $ readTVarIO (challengedToChallenger app)
     let challenger = Map.lookup acceptingPlayerU myMap
-    currentGameId <- liftIO $ readTVarIO (nextGameId app)
+    --currentGameId <- liftIO $ readTVarIO (nextGameId app)
     if isJust challenger
         then do
+            let challengingPlayer = fromJust challenger
             liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.delete acceptingPlayerU s) 
-            liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert acceptingPlayerU currentGameId s) 
-            liftIO $ atomically $ modifyTVar (userToGameId app) (\s -> Map.insert (fromJust challenger) currentGameId s) 
-            liftIO $ createGame app (fromJust challenger) acceptingPlayerU
-            
-            userGameChannelsMap <- liftIO $ readTVarIO (userGameChannels app)
-            let player1GC = Map.lookup (fromJust challenger) userGameChannelsMap
-            let player2GC = Map.lookup acceptingPlayerU userGameChannelsMap
-            
-            liftIO $ joinGame (fromJust challenger) (fromJust player1GC) app 
-            liftIO $ joinGame acceptingPlayerU (fromJust player2GC) app
+            liftIO $ createGame app challengingPlayer acceptingPlayerU
 
-            gamesLength <- liftIO $ readTVarIO (nextGameId app)
-            let game = liftIO $ fromJust $ getGame currentGameId gamesLength (games app)
-            ch <-  game >>= (\g -> return (gameChan g))
+            --liftIO $ joinGame challengingPlayer app 
+            --liftIO $ joinGame acceptingPlayerU app
+
+            --gamesLength <- liftIO $ readTVarIO (nextGameId app)
+            --gameAndGameChan <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
+            --let game = fst gameAndGameChan
+            --let ch = snd gameAndGameChan
+
             liftIO $ print "game should be okay"
             liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "you can proceed to the game!"
         else
@@ -279,15 +325,26 @@ handleReady app player = do
     let gameId = Map.lookup pid myMap
     if isJust gameId
         then do
-            gamesLength <- liftIO $ readTVarIO (nextGameId app)
-            game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
-            liftIO $ print (gameStatus game)
-            let newGame = liftIO $ setReady game pid
-            liftIO $ atomically $ modifyTVar (games app) (\gs -> set (element  (fromJust gameId)) (newGame) gs)
-            game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
-            liftIO $ print (gameStatus game)
+            --gamesLength <- liftIO $ readTVarIO (nextGameId app)
+            --gameAndGameChan <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
+            --let game = fst gameAndGameChan
+            --liftIO $ print (gameStatus game)
+            let gid = fromJust gameId
+            let replaceOp = (\gameAndGameChan -> gameAndGameChan >>= (\pair -> return (setReady (fst pair) (unpack player), snd pair)))
+            liftIO $ atomically $ modifyTVar (games app) (\gs ->
+                replace' gid replaceOp gs)
+            --game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
+            --liftIO $ print (gameStatus game)
         else
             return ()
+
+--setGameReady :: [IO (Game, TChan Message)] -> Int -> Text -> [IO (Game, TChan Message)]
+--setGameReady games gid player = do 
+--    let gameAndGameChan' = (games !! gid) >>= (\pair -> ((setReady (fst pair) (unpack player)), snd pair))
+--    replace' gid (return gameAndGameChan') games
+
+replace' :: Int -> (a -> a) -> [a] -> [a]
+replace' index op list = (take index list) ++ [op (list !! index)] ++ (drop (index+1) list)
 
 handleOther app msg = do
     liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg ""
@@ -472,7 +529,7 @@ postAccRegisterR = do
 
 main :: IO ()
 main = do
-    games <- newTVarIO ([] :: [IO Game])
+    games <- newTVarIO ([] :: [IO (Game, TChan Message)])
     nextGameId <- newTVarIO (0 :: Int)
     counter <- newTVarIO (0 :: Int)
     chatChan <- atomically newBroadcastTChan

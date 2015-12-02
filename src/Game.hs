@@ -2,7 +2,6 @@
 module Game
     ( Game
     , printGame
-    , gameChan
     , gameStatus
     , initGame
     , tick
@@ -11,7 +10,9 @@ module Game
     , setReady
     , needsLogging
     , setCompleted
+    , getGameMsg
     , Direction(Up,Down)
+    , Status (Initial,LeftReady,RightReady,Playing,CompletedNotLogged,Completed)
     ) where
 {-
 User key movements translate to either
@@ -31,11 +32,12 @@ import Messages
 import Data.Aeson
 import Data.Maybe
 import Data.ByteString
-import Control.Concurrent.STM
+--import Control.Concurrent.STM
 import GHC.Generics
+--import Data.IORef
 
-import Control.Concurrent (threadDelay, forkIO)
-import Control.Monad
+--import Control.Concurrent (threadDelay, forkIO)
+--import Control.Monad
 
 printGame :: Game -> IO ()
 printGame game = do
@@ -115,13 +117,12 @@ data Game = Game {
     gameStatus :: Status,
     lPlayer :: String, 
     rPlayer :: String,
-    state :: GameState,
-    gameChan :: TChan Message
-}
+    state :: GameState
+} deriving (Show, Generic)
+instance ToJSON Game
 
 createStatusUpdate :: Game -> StatusUpdate
-createStatusUpdate game =
-    StatusUpdate { status = gameStatus game }
+createStatusUpdate game = StatusUpdate { status = gameStatus game }
 
 initBall :: Ball
 initBall =
@@ -157,18 +158,14 @@ initState =
               , maxScore = _MAX_SCORE
               }
 
-initGame :: String -> String -> IO Game
-initGame lPlayerName rPlayerName = do
-    gameChan <- newBroadcastTChanIO
-    forkIO $ forever $ do
-        atomically $ writeTChan gameChan $ newChatMsg "hello game"
-        threadDelay 1000000
-    return Game { gameStatus = Initial
-                , lPlayer = lPlayerName
-                , rPlayer = rPlayerName
-                , state = initState
-                , gameChan = gameChan
-                }
+initGame :: String -> String -> Game
+initGame lPlayerName rPlayerName =
+    Game { gameStatus = Initial
+         , lPlayer = lPlayerName
+         , rPlayer = rPlayerName
+         , state = initState
+         }
+
 
 detectCollision :: GameState -> GameState
 detectCollision state
@@ -208,47 +205,47 @@ paddleHit state =
             = -vx
         | otherwise = vx
 
-writeStatusUpdate :: Game -> IO ()
-writeStatusUpdate game = do
-    let msg = newMessage GameStatusMsg (toJSON $ createStatusUpdate game)
-    atomically $ writeTChan (gameChan game) msg
+getGameMsg :: Game -> Message
+getGameMsg game = newMessage GameMsg (toJSON game)
+
+--getStatusUpdate :: Game -> Message
+--getStatusUpdate game = newMessage GameStatusMsg (toJSON $ createStatusUpdate game)
+
+-- move out and use externally
+--writeStatusUpdate :: Game -> IO ()
+--writeStatusUpdate game = do
+--    let msg = newMessage GameStatusMsg (toJSON $ createStatusUpdate game)
+--    ch <- readIORef (gameChan game)
+--    atomically $ writeTChan ch msg
 
 {- 
 functions for externally updating game state
 -}
-tick :: Game -> IO Game
-tick game = do
-    print (gameStatus game)
-    print "jawdoiwajoidjw"
+-- tick should be followed by writing a status update to channel
+tick :: Game -> Game
+tick game =
     if (gameStatus game) /= Playing
-        then return game
+        then game
         else tick' game
 
-tick' :: Game -> IO Game
+tick' :: Game -> Game
 tick' game = do 
-    print "hello"
     let state' = update state
     if lPoints == _MAX_SCORE || rPoints == _MAX_SCORE
-        then do
-            let game = game { gameStatus = CompletedNotLogged }
-            writeStatusUpdate game
-            return game
-        else do
-            let msg = newMessage GameStateMsg (toJSON state')
-            atomically $ writeTChan gameChan $ msg
-            return game { state = state' }
+        then game { state = state', gameStatus = CompletedNotLogged }
+        else game { state = state' }
   where
-    Game _ _ _ state gameChan = game
+    Game _ _ _ state = game
     GameState _ _ _ lPoints rPoints _ _ _ = state
     update = paddleHit . moveBall . detectCollision
 
-movePaddle :: Game -> String -> Direction -> IO Game
+movePaddle :: Game -> String -> Direction -> Game
 movePaddle game player direction
-    | player == lPlayer = return game { state = state {lPaddle = movePaddle' state (lPaddle state) dir} }
-    | player == rPlayer = return game { state = state {rPaddle = movePaddle' state (rPaddle state) dir} }
-    | otherwise = return game
+    | player == lPlayer = game { state = state {lPaddle = movePaddle' state (lPaddle state) dir} }
+    | player == rPlayer = game { state = state {rPaddle = movePaddle' state (rPaddle state) dir} }
+    | otherwise = game
   where
-    Game _ lPlayer rPlayer state _ = game
+    Game _ lPlayer rPlayer state = game
     dir
         | direction == Up = _UP_DIR
         | direction == Down = _DOWN_DIR
@@ -267,16 +264,15 @@ getWinLose game
     | rPoints == _MAX_SCORE = Just (rPlayer, lPlayer)
     | otherwise = Nothing
   where
-    Game _ lPlayer rPlayer state _ = game
+    Game _ lPlayer rPlayer state = game
     GameState _ _ _ lPoints rPoints _ _ _ = state
 
-setReady :: Game -> String -> IO Game
-setReady game player = do
-    let game' = game { gameStatus = status' }
-    writeStatusUpdate game'
-    return game'
+-- write status update after this
+setReady :: Game -> String -> Game
+setReady game player =
+    game { gameStatus = status' }
   where
-    Game status lPlayer rPlayer _ _ = game
+    Game status lPlayer rPlayer _ = game
     status'
         | (player == lPlayer) && (status == Initial) = LeftReady
         | (player == lPlayer) && (status == RightReady) = Playing
@@ -287,9 +283,8 @@ setReady game player = do
 needsLogging :: Game -> Bool
 needsLogging game = (gameStatus game) == CompletedNotLogged
 
-setCompleted :: Game -> IO Game
-setCompleted game = do
-    let status = gameStatus game
-    if status == CompletedNotLogged
-        then return game { gameStatus = Completed }
-        else return game
+setCompleted :: Game -> Game
+setCompleted game =
+    if (gameStatus game) == CompletedNotLogged
+        then game { gameStatus = Completed }
+        else game
