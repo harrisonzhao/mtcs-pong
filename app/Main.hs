@@ -119,7 +119,7 @@ newAccountForm = renderDivs $ NewPerson
     <*> areq passwordField "Password: " Nothing
     <*> areq passwordField "Confirm: " Nothing
 
-_GAME_TICK_DELAY = 3000000
+_GAME_TICK_DELAY = 100000
 
 --updateGame :: Game -> IO (Game)
 --updateGame game = (tick game) >>= \g -> do
@@ -172,7 +172,7 @@ updateGames games = forever $ do
     gs <- readTVarIO games
     mapM_ (\iog -> iog >>= (\p -> do
         let ch = snd p
-        atomically $ writeTChan ch (newChatMsg "in game now bitches"))) gs
+        atomically $ writeTChan ch (newMessage GarbageMsg (toJSON Garbage)))) gs
     print $ length gs
     atomically $ modifyTVar games (\gs -> map (\pair -> updateGame pair) gs)
     threadDelay _GAME_TICK_DELAY
@@ -269,10 +269,9 @@ handleMove app player direction = do
             case direction of
                 "up" -> liftIO $ moveGamePaddle (games app) gid pid Up
                 "down" -> liftIO $ moveGamePaddle (games app) gid pid Down
-            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
+            return ()
         else
-            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
-    
+            return ()
 handleChallenge app player1 player2 = do
     liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.insert (unpack player2) (unpack player1) s)
     liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeMsg (toJSON $ (Challenge player1 player2))
@@ -299,7 +298,10 @@ handleAccept app acceptingPlayer = do
             let challengingPlayer = fromJust challenger
             liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.delete acceptingPlayerU s) 
             liftIO $ createGame app challengingPlayer acceptingPlayerU
-
+            
+            usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
+    
             userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
             liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
 
@@ -310,8 +312,7 @@ handleAccept app acceptingPlayer = do
             --gameAndGameChan <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
             --let game = fst gameAndGameChan
             --let ch = snd gameAndGameChan
-
-            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "you can proceed to the game!"
+            return ()
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeExpMsg (toJSON $ (ChallengeExp acceptingPlayer))
     
@@ -347,7 +348,7 @@ replace' :: Int -> (a -> a) -> [a] -> [a]
 replace' index op list = (take index list) ++ [op (list !! index)] ++ (drop (index+1) list)
 
 handleOther app msg = do
-    liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg ""
+    return ()
 
 handleMsg app msg = do
     let msgParsed = splitOn "`" msg
@@ -436,48 +437,286 @@ getLobbyR username = do
     defaultLayout $ do
         addScriptRemote "https://ajax.googleapis.com/ajax/libs/jquery/1.7.0/jquery.js"
         [whamlet|
-            <div #output>
-            <form #form>
-                <input #input autofocus>
+            <div .content #content>
+                <div .game #game>
+                    <div .paddleA #paddleA></div>
+                    <div .paddleB #paddleB></div>
+                    <div .ball #ball>
+            <div .chatBox #chatBox>
+            <div .usersOnLine #usersOnLine>
+            <input .message #message type=text>
+            <button .send #send type="button" onclick="sendChatMsg()">Send
+
         |]
         toWidget [lucius|
-            \#output {
-                width: 600px;
-                height: 400px;
-                border: 1px solid black;
-                margin-bottom: 1em;
-                p {
-                    margin: 0 0 0.5em 0;
-                    padding: 0 0 0.5em 0;
-                    border-bottom: 1px dashed #99aa99;
-                }
+            .chatBox {
+                position: absolute;
+                width: 1853px;
+                height: 225px;
+                border: 1px teal solid;
+                float:left;
+                margin-top:1px;
+                bottom: 80px;
+                left: 0;
+                overflow: scroll;
             }
-            \#input {
-                width: 600px;
-                display: block;
+            .usersOnLine{
+                position: absolute;
+                right: 0;
+                top: 0;
+                font-family:tahoma;
+                font-size:14px;
+                color:orange;
+                border:1px teal solid;
+                width:300px;
+                height:677px;
+                overflow:scroll;
+                margin-left:1px;
+                
+            }
+            .message {
+                position: absolute;
+                width: 1756px;
+                height: 80px;
+                border: 1px teal solid;
+                float:left;
+                margin-top:1px;
+                bottom: 0;
+                left: 0;
+            }
+            .send {
+                position: absolute;
+                width: 100px;
+                height: 80px;
+                float:left;
+                margin:1px;
+                bottom: 0;
+                right: 0;
+            }
+            .game {
+                background: #daeff5;
+                width: 1550px;
+                height: 676px;
+                position: absolute;
+                left: 0;
+                top: 0;
+                margin: 0 auto;
+                overflow: hidden;
+                border-radius: 5px;
+                border: 2px solid #ffffff
+            }
+            .ball {
+                background: #d9ed7a;
+                position: absolute;
+                width: 20px;
+                height: 20px;
+                left: 777px;
+                top: 340px;
+                border-radius: 10px;
+                border: 1px solid #000000
+            }
+            .paddleA {
+                background: #d5d3d3;
+                position: absolute;
+                width: 15px;
+                height: 70px;
+                left: 0px;
+                top: 340px;
+                border-radius: 5px;
+                border: 1px solid #000000
+            }
+            .paddleB {
+                background: #d5d3d3;
+                position: absolute;
+                width: 15px;
+                height: 70px;
+                left: 1539px;
+                top: 340px;
+                border-radius: 5px;
+                border: 1px solid #000000
             }
         |]
         toWidget [julius|
-            var url = document.URL,
-                output = document.getElementById("output"),
-                form = document.getElementById("form"),
-                input = document.getElementById("input"),
-                conn;
+            var url = document.URL, conn;
 
             url = url.replace("http:", "ws:").replace("https:", "wss:");
             conn = new WebSocket(url);
 
-            conn.onmessage = function(e) {
-                var p = document.createElement("p");
-                p.appendChild(document.createTextNode(e.data));
-                output.appendChild(p);
+            var usersOnlineLocal = [];
+            var username;
+            var pos = 0;
+            var playerInGame = false;
+
+            window.onload = function(e){
+                var URLparts = (document.URL).split("/");
+                username = URLparts[URLparts.length-1];
             };
 
-            form.addEventListener("submit", function(e){
-                conn.send(input.value);
-                input.value = "";
-                e.preventDefault();
-            });
+            conn.onmessage = function(e) {
+                message = JSON.parse(e.data);
+                console.log("new message has arrived");
+                switch(message.msgType){
+                    case "ChallengeMsg":
+                        challengePopUp(message.msgData.challenger);
+                        break;
+                    case "ChatMsg":
+                        addChatMsg(message.msgData.fromUser,message.msgData.chatData);
+                        break;
+                    case "ReadyMsg":
+                        readyPopUp();
+                        break;
+                    case "GameMsg":
+                        processGameState(message.msgData);
+                        break;
+                    case "UsersOnlineMsg":
+                        updateUsersOnlineList(message.msgData.usersOL);
+                        break;
+                    case "UsersInGameMsg":
+                        updateUsersInGameList(message.msgData.usersIG);
+                        break;
+                    default:
+                        console.log("unknown message");
+                        break;
+                }
+            };
+
+            function sendMessageToServer(message){
+                conn.send(message);
+            };
+
+            function updateUsersOnlineList(usersOnlineList){
+                usersOnlineLocal = usersOnlineList;
+                usersOnLine.innerHTML=""
+                for(i=0;i<usersOnlineList.length;i++){
+                    user = document.createElement("span");
+                    user.innerHTML=usersOnlineList[i];
+                    usersOnLine.appendChild(user);
+                    brLine = document.createElement("br");
+                    usersOnLine.appendChild(brLine)
+                }
+            };
+
+            function updateUsersInGameList(usersInGame){
+                var childSpans = usersOnLine.getElementsByTagName('span');
+                for(i=0; i< childSpans.length; i++ ){
+                    if(usersInGame.indexOf(childSpans[i].innerHTML) > (-1)){
+                        childSpans[i].innerHTML = childSpans[i].innerHTML+" (Ingame)";
+                    }
+                    else if (!(childSpans[i].innerHTML.indexOf("Ingame")> (-1))) {
+                        childSpans[i].innerHTML = "<a onclick=createChallengePopup("+JSON.stringify(childSpans[i].innerHTML)+") href>"+childSpans[i].innerHTML+"</a>"
+                    }
+                }
+            };  
+
+            function addChatMsg(fromUser,message){
+                msg = document.createElement("span");
+                msg.innerHTML=fromUser+": " + message;
+                chatBox.appendChild(msg);
+                brLine = document.createElement("br");
+                chatBox.appendChild(brLine)
+            };  
+
+            function challengePopUp(challenger){
+                var accept = confirm("Accept the challenge from "+challenger+"?");
+                if (accept == true) {
+                    acceptChallenge();
+                    console.log("You accepted!");
+                } else {
+                    console.log("You denied!");
+                } 
+            };
+
+            function readyPopUp(){
+                var ready = confirm("Ready to start the game?");
+                if (ready == true) {
+                    declareReady();
+                    console.log("You are ready!");
+                } else {
+                    console.log("You are not ready!");
+                } 
+            };
+
+            function processGameState(gameData){
+                console.log("ProcessGameState is called");
+                if(gameData.gameStatus == "Playing"){
+                    playerInGame = true;
+                    console.log("Moving paddleL to "
+                        +gameData.state.lPaddle.py
+                        +" Moving paddleR to "
+                        +gameData.state.rPaddle.py
+                        +" Moving ball to ("
+                        +gameData.state.ball.bx+","
+                        +gameData.state.ball.by+")");
+                    updatePaddlesPos(gameData.state.rPaddle.py,gameData.state.lPaddle.py)
+                    updateBallPos(gameData.state.ball.bx,gameData.state.ball.by)
+                }
+            };
+
+            function sendChallenge(challengee){
+                sendMessageToServer("challenge`"+username+"`"+challengee);
+            };
+
+            function sendChatMsg(){
+                msg = document.getElementById("message").value;
+                sendMessageToServer("chat`"+username+"`"+msg);
+                document.getElementById("message").value = "";
+            };
+
+            function acceptChallenge(){
+                sendMessageToServer("accept`"+username);
+            };
+
+            function declareReady(){
+                sendMessageToServer("ready`"+username);
+            };
+
+            function movePaddle(direction){
+                sendMessageToServer("move`"+username+"`"+direction);
+            }
+
+            function leaveGame(){
+            };
+
+            function logout(){
+            };
+
+
+            function createChallengePopup(challengee){
+                var createChallenge = confirm("Want to challenge "+challengee+"?");
+                if (createChallenge == true) {
+                    sendChallenge(challengee);
+                }
+            }
+
+            document.onkeydown=function(e)
+            {
+                pos=1;
+                key=window.event?e.keyCode:e.which;
+            };
+
+            document.onkeyup=function(e){pos=0;};
+
+            setInterval(function()
+            {
+                if ($(document.getElementById("message")).is( ":focus" ) || (pos == 0) || !playerInGame)
+                    return;
+                if(key==38){
+                    movePaddle("up");
+                }
+                if(key==40)
+                    movePaddle("down");
+            },100);
+
+            var ball = { speed: 3, x: 550, y: 230, directionX: 1, directionY: 1 };
+
+            function updatePaddlesPos(lPos,rPos) {
+                $("#paddleA").css("top", parseInt(lPos));
+                $("#paddleB").css("top", parseInt(rPos));
+            };
+
+            function updateBallPos(xPos, yPos) {
+                $("#ball").css({ "left": parseInt(xPos), "top": parseInt(yPos) });
+            };
         |]
 
 --getPersonR :: PersonId -> Handler String

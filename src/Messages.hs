@@ -12,7 +12,8 @@ data MessageType = GameMsg
                  | ReadyMsg
                  | UsersOnlineMsg
                  | UsersInGameMsg 
-                 | ChallengeExpMsg deriving (Eq, Show, Generic)
+                 | ChallengeExpMsg 
+                 | GarbageMsg deriving (Eq, Show, Generic)
 instance ToJSON MessageType
 
 data Challenge = Challenge {
@@ -51,6 +52,11 @@ data UsersOnline = UsersOnline{
 }deriving (Show, Generic)
 instance ToJSON UsersOnline
 instance FromJSON UsersOnline
+
+data Garbage = Garbage{
+}deriving (Show, Generic)
+instance ToJSON Garbage
+instance FromJSON Garbage
 
 newChatMsg :: Text -> Message
 newChatMsg msg = newMessage ChatMsg (toJSON msg)
