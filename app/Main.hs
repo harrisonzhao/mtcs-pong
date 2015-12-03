@@ -432,26 +432,6 @@ getLoginR = do
         |]
 
 
-postLoginR :: Handler Html
-postLoginR = do
-    ((result, widget), enctype) <- runFormPost userForm
-    case result of
---      FormSuccess user -> defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
-        FormSuccess user -> do
-            let postedUsername = (username user)
-            let postedPassword = (password user)
-            redirect (LobbyR $ unpack postedUsername)
-        -- Miraj
-        --defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
-        _ -> defaultLayout
-            [whamlet|
-                <h1>Uh oh, something went wrong with the Login POST request.</h1>
-                <p>Invalid input, let's try again.
-                <form method=post action=@{LoginR} enctype=#{enctype}>
-                    ^{widget}
-                    <button>LoginAttempt2
-            |]
-
 getLobbyR :: String -> Handler Html
 getLobbyR username = do
     webSockets (appHandler username)
@@ -764,7 +744,10 @@ postAccRegisterR = do
         FormSuccess newPerson -> do 
             defaultLayout [whamlet|<p>Register Result:<p>#{show newPerson}|]
             redirect LoginR
---createNew "name" (username newPerson) (password newPerson)
+            -- CREATE NEW USER *****
+           -- let a = unpack(newUsername newPerson)
+           -- let b = unpack(newPassword newPerson)
+           --id <- createNew a b
         _ -> defaultLayout
             [whamlet|
                 <h1>Uh oh, something went wrong with the Registration POST request.</h1>
@@ -774,6 +757,29 @@ postAccRegisterR = do
                     <button>RegisterAttempt2
             |]
 
+
+postLoginR :: Handler Html
+postLoginR = do
+    ((result, widget), enctype) <- runFormPost userForm
+    case result of
+--      FormSuccess user -> defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
+        FormSuccess user -> do
+            let postedUsername = (username user)
+            let postedPassword = (password user)
+            redirect (LobbyR $ unpack postedUsername)
+            -- AUTHENTICATE***
+        -- getUser postedUsername postedPassword
+        --defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
+        _ -> defaultLayout
+            [whamlet|
+                <h1>Uh oh, something went wrong with the Login POST request.</h1>
+                <p>Invalid input, let's try again.
+                <form method=post action=@{LoginR} enctype=#{enctype}>
+                    ^{widget}
+                    <button>LoginAttempt2
+            |]
+            
+            
 main :: IO ()
 main = do
     games <- newTVarIO ([] :: [IO (Game, TChan Message)])
