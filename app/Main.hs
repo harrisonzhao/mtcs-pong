@@ -39,8 +39,9 @@ import Messages
 import Game
 
 data Pong = Pong {
+    persistConfig :: SqliteConf,
+    connPool :: ConnectionPool,
     games :: TVar [IO (Game, TChan Message)],
-    pool :: ConnectionPool,
     nextGameId :: TVar Int,
     --chatChan can send chat and challenges
     chatChan :: TChan Message,
@@ -57,7 +58,6 @@ data Pong = Pong {
 -- Define our entities as usual
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 Person
- fullname String
  username String
  UsernameKey username
  password String
@@ -66,6 +66,25 @@ Person
  loss Int
     deriving Show
 |]
+
+-- Nothing special here
+instance Yesod Pong
+-- Now we need to define a YesodPersist instance, which will keep track of
+-- which backend we're using and how to run an action.
+
+instance YesodJquery Pong
+
+instance RenderMessage Pong FormMessage where
+    renderMessage _ _ = defaultFormMessage
+
+instance YesodPersist Pong where
+    type YesodPersistBackend Pong = SqlBackend
+    runDB = defaultRunDB persistConfig connPool
+--    runDB action = do
+--        pongApp <- getYesod
+--        runSqlPool action (pool pongApp)
+instance YesodPersistRunner Pong where
+    getDBRunner = defaultGetDBRunner connPool
 
 -- We keep our connection pool in the foundation. At program initialization, we
 -- create our initial pool, and each time we need to perform an action we check
@@ -81,22 +100,6 @@ mkYesod "Pong" [parseRoutes|
 /lobby/#String   LobbyR GET
 |]
 
--- Nothing special here
-instance Yesod Pong
--- Now we need to define a YesodPersist instance, which will keep track of
--- which backend we're using and how to run an action.
-
-instance YesodJquery Pong
-
-instance RenderMessage Pong FormMessage where
-    renderMessage _ _ = defaultFormMessage
-
-instance YesodPersist Pong where
-    type YesodPersistBackend Pong = SqlBackend
-    runDB action = do
-        Pong {..} <- getYesod
-        runSqlPool action pool
-
 data User = User
     { username      :: Text
     , password      :: Text
@@ -111,15 +114,15 @@ data NewPerson = NewPerson
   deriving Show
 
 
---createNew un pw = do
---  id <- runDB $ (insert $ Person un pw 0 0 0)
---  return id
+createNew un pw = do
+  id <- runDB $ (insert $ Person un pw 0 0 0)
+  return id
   
---getUser un pw = do
---  u <- runDB $ selectFirst [PeronUsername ==. un, PersonPassword ==. pw] []
---  case u of
---   Just person -> return $ Right person
---   Nothing -> return $ Left ("Login failed.." :: Text)
+getUser un pw = do
+  u <- runDB $ selectFirst [PersonUsername ==. un, PersonPassword ==. pw] []
+  case u of
+    Just person -> return $ Right person
+    Nothing -> return $ Left ("Login failed.." :: Text)
    
 --userLoss un = do
  --updateWhere [PersonUsername ==. un] [PersonLoss +=. 1]
@@ -743,12 +746,13 @@ postAccRegisterR = do
     ((result, widget), enctype) <- runFormPost newAccountForm
     case result of
         FormSuccess newPerson -> do 
+            let a = unpack(newUsername newPerson)
+            let b = unpack(newPassword newPerson)
+            -- CREATE NEW USER *****
+            id <- createNew a b
+            --id <- runDB $ (insert $ Person a b 0 0 0)
             defaultLayout [whamlet|<p>Register Result:<p>#{show newPerson}|]
             redirect LoginR
-            -- CREATE NEW USER *****
-           -- let a = unpack(newUsername newPerson)
-           -- let b = unpack(newPassword newPerson)
-           --id <- createNew a b
         _ -> defaultLayout
             [whamlet|
                 <h1>Uh oh, something went wrong with the Registration POST request.</h1>
@@ -765,11 +769,11 @@ postLoginR = do
     case result of
 --      FormSuccess user -> defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
         FormSuccess user -> do
-            let postedUsername = (username user)
-            let postedPassword = (password user)
-            redirect (LobbyR $ unpack postedUsername)
+            let postedUsername = unpack(username user)
+            let postedPassword = unpack(password user)
+            authResult <- getUser postedUsername postedPassword
             -- AUTHENTICATE***
-        -- getUser postedUsername postedPassword
+            redirect (LobbyR $ postedUsername)
         --defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
         _ -> defaultLayout
             [whamlet|
@@ -783,10 +787,15 @@ postLoginR = do
 openConnectionCount :: Int
 openConnectionCount = 10            
 main :: IO ()
-main = runStderrLoggingT $ withSqlitePool "test.db3" openConnectionCount
-  $ \pool -> liftIO $ do
-    runResourceT $ flip runSqlPool pool $ do
-         runMigration migrateAll
+main = do
+    let conf = SqliteConf "test.db3" openConnectionCount
+    pool <- createPoolConfig conf
+    flip runSqlPersistMPool pool $ do
+        runMigration migrateAll
+--main = runStderrLoggingT $ withSqlitePool "test.db3" openConnectionCount
+--  $ \pool -> liftIO $ do
+--    runResourceT $ flip runSqlPool pool $ do
+--         runMigration migrateAll
     games <- newTVarIO ([] :: [IO (Game, TChan Message)])
     nextGameId <- newTVarIO (0 :: Int)
     chatChan <- atomically newBroadcastTChan
@@ -796,4 +805,4 @@ main = runStderrLoggingT $ withSqlitePool "test.db3" openConnectionCount
     userGameChannels <- newTVarIO (Map.empty)
     print $ encode $ toJSON $ newChatMsg "hello world"
     forkIO $ updateGames games
-    warp 3000 $ Pong games pool nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels
+    warp 3000 $ Pong conf pool games nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels
