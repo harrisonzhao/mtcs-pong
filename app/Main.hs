@@ -24,15 +24,16 @@ import qualified Data.Text as L
 
 import Yesod.Form.Jquery
 import Data.Text (Text)
-import Database.Persist
---import Database.Persist.Sqlite
-import Database.Persist.Sql
-import Database.Persist.TH
 import Control.Monad.Trans.Resource (runResourceT)
 import Control.Monad.Logger (runStderrLoggingT)
 import Control.Monad.Reader
 import Control.Lens
-import qualified Data.Conduit.List as CL
+
+import Control.Monad.IO.Class (liftIO)
+import Database.Persist
+import Database.Persist.Sqlite
+import Database.Persist.Sql
+import Database.Persist.TH
 
 import Messages
 import Game
@@ -107,6 +108,17 @@ data NewPerson = NewPerson
     , confirmPassword     :: Text
     }
   deriving Show
+
+createNew un pw = do
+  id <- runDB $ (insert $ Person un pw 0 0 0)
+  return id
+  
+getUser un pw = do
+  u <- runDB $ selectFirst [PeronUsername ==. un, PersonPassword ==. pw] []
+  case u of
+   Just person -> return $ Right person
+   Nothing -> return $ Left ("Login failed.." :: Text)
+   
 
 userForm :: Html -> MForm Handler (FormResult User, Widget)
 userForm = renderDivs $ User
