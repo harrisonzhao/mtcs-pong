@@ -113,21 +113,21 @@ data NewPerson = NewPerson
 
 --createNew un pw = do
 --  id <- runDB $ (insert $ Person un pw 0 0 0)
- -- return id
+--  return id
   
 --getUser un pw = do
- -- u <- runDB $ selectFirst [PersonUsername ==. un, PersonPassword ==. pw] []
+--  u <- runDB $ selectFirst [PeronUsername ==. un, PersonPassword ==. pw] []
 --  case u of
- --  Just person -> return $ Right person
-  -- Nothing -> return $ Left ("Login failed.." :: Text)
+--   Just person -> return $ Right person
+--   Nothing -> return $ Left ("Login failed.." :: Text)
    
 --userLoss un = do
--- updateWhere [PersonUsername ==. un] [PersonLoss +=. 1]
+ --updateWhere [PersonUsername ==. un] [PersonLoss +=. 1]
  --updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
 
 --userWin un = do
--- updateWhere [PersonUsername ==. un] [PersonWin +=. 1]
--- updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+ --updateWhere [PersonUsername ==. un] [PersonWin +=. 1]
+ --updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
 
 
 userForm :: Html -> MForm Handler (FormResult User, Widget)
