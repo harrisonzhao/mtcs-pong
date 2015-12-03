@@ -109,6 +109,7 @@ data NewPerson = NewPerson
     }
   deriving Show
 
+
 createNew un pw = do
   id <- runDB $ (insert $ Person un pw 0 0 0)
   return id
@@ -119,6 +120,14 @@ getUser un pw = do
    Just person -> return $ Right person
    Nothing -> return $ Left ("Login failed.." :: Text)
    
+userLoss un = do
+ updateWhere [PersonUsername ==. un] [PersonLoss +=. 1]
+ updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+
+userWin un = do
+ updateWhere [PersonUsername ==. un] [PersonWin +=. 1]
+ updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+
 
 userForm :: Html -> MForm Handler (FormResult User, Widget)
 userForm = renderDivs $ User
