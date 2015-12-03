@@ -1,4 +1,4 @@
-{-# LANGUAGE EmptyDataDecls, FlexibleContexts, GADTs, GeneralizedNewtypeDeriving, MultiParamTypeClasses, ViewPatterns, TypeSynonymInstances, QuasiQuotes, TemplateHaskell, TypeFamilies, OverloadedStrings, DeriveGeneric #-}
+{-# LANGUAGE EmptyDataDecls, FlexibleContexts, GADTs, GeneralizedNewtypeDeriving, MultiParamTypeClasses, ViewPatterns, TypeSynonymInstances, QuasiQuotes, TemplateHaskell, TypeFamilies, OverloadedStrings, DeriveGeneric, RecordWildCards #-}
 module Main where
 
 import Yesod.Core
@@ -29,7 +29,7 @@ import Control.Monad.Logger (runStderrLoggingT)
 import Control.Monad.Reader
 import Control.Lens
 
-import Control.Monad.IO.Class (liftIO)
+--import Control.Monad.IO.Class (liftIO)
 import Database.Persist
 import Database.Persist.Sqlite
 import Database.Persist.Sql
@@ -40,6 +40,7 @@ import Game
 
 data Pong = Pong {
     games :: TVar [IO (Game, TChan Message)],
+    pool :: ConnectionPool,
     nextGameId :: TVar Int,
     --chatChan can send chat and challenges
     chatChan :: TChan Message,
@@ -90,11 +91,11 @@ instance YesodJquery Pong
 instance RenderMessage Pong FormMessage where
     renderMessage _ _ = defaultFormMessage
 
---instance YesodPersist Pong where
---    type YesodPersistBackend Pong = SqlBackend
---    runDB action = do
---        Pong pool <- getYesod
---        runSqlPool action pool
+instance YesodPersist Pong where
+    type YesodPersistBackend Pong = SqlBackend
+    runDB action = do
+        Pong {..} <- getYesod
+        runSqlPool action pool
 
 data User = User
     { username      :: Text
@@ -110,23 +111,23 @@ data NewPerson = NewPerson
   deriving Show
 
 
-createNew un pw = do
-  id <- runDB $ (insert $ Person un pw 0 0 0)
-  return id
+--createNew un pw = do
+--  id <- runDB $ (insert $ Person un pw 0 0 0)
+ -- return id
   
-getUser un pw = do
-  u <- runDB $ selectFirst [PeronUsername ==. un, PersonPassword ==. pw] []
-  case u of
-   Just person -> return $ Right person
-   Nothing -> return $ Left ("Login failed.." :: Text)
+--getUser un pw = do
+ -- u <- runDB $ selectFirst [PersonUsername ==. un, PersonPassword ==. pw] []
+--  case u of
+ --  Just person -> return $ Right person
+  -- Nothing -> return $ Left ("Login failed.." :: Text)
    
-userLoss un = do
- updateWhere [PersonUsername ==. un] [PersonLoss +=. 1]
- updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+--userLoss un = do
+-- updateWhere [PersonUsername ==. un] [PersonLoss +=. 1]
+ --updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
 
-userWin un = do
- updateWhere [PersonUsername ==. un] [PersonWin +=. 1]
- updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
+--userWin un = do
+-- updateWhere [PersonUsername ==. un] [PersonWin +=. 1]
+-- updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
 
 
 userForm :: Html -> MForm Handler (FormResult User, Widget)
@@ -779,9 +780,13 @@ postLoginR = do
                     <button>LoginAttempt2
             |]
             
-            
+openConnectionCount :: Int
+openConnectionCount = 10            
 main :: IO ()
-main = do
+main = runStderrLoggingT $ withSqlitePool "test.db3" openConnectionCount
+  $ \pool -> liftIO $ do
+    runResourceT $ flip runSqlPool pool $ do
+         runMigration migrateAll
     games <- newTVarIO ([] :: [IO (Game, TChan Message)])
     nextGameId <- newTVarIO (0 :: Int)
     chatChan <- atomically newBroadcastTChan
@@ -791,4 +796,4 @@ main = do
     userGameChannels <- newTVarIO (Map.empty)
     print $ encode $ toJSON $ newChatMsg "hello world"
     forkIO $ updateGames games
-    warp 3000 $ Pong games nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels
+    warp 3000 $ Pong games pool nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels

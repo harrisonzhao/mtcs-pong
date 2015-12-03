@@ -30,22 +30,44 @@ executable mtcs-pong-exe
   build-depends:       base
                      , mtcs-pong
                      , yesod-core
+                     , yesod-auth
+                     , yesod-static
                      , yesod-websockets
                      , yesod-form
                      , yesod-persistent
+                     , classy-prelude
+                     , classy-prelude-conduit
+                     , classy-prelude-yesod
                      , stm
                      , bytestring
                      , containers
                      , conduit
                      , conduit-combinators
                      , aeson
+                     , safe
+                     , fast-logger
                      , monad-logger
                      , mtl
+                     , persistent-sqlite
                      , persistent-template
                      , persistent
+                     , transformers
+                     , old-locale
+                     , time
                      , resourcet
                      , text
+                     , shakespeare
+                     , monad-control
+                     , template-haskell
+                     , directory
+                     , http-conduit
+                     , yaml
+                     , hjsmin
+                     , wai-extra
+                     , wai-logger
+                     , warp
                      , lens
+                     , vector
                      , containers
   default-language:    Haskell2010
 
