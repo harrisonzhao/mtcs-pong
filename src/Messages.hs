@@ -12,7 +12,8 @@ data MessageType = GameMsg
                  | ReadyMsg
                  | UsersOnlineMsg
                  | UsersInGameMsg 
-                 | ChallengeExpMsg deriving (Eq, Show, Generic)
+                 | ChallengeExpMsg
+                 | LeaveMsg deriving (Eq, Show, Generic)
 instance ToJSON MessageType
 
 data Challenge = Challenge {
@@ -39,6 +40,9 @@ data Chat = Chat{
 }deriving (Show, Generic)
 instance ToJSON Chat
 instance FromJSON Chat
+
+newLeaveMsg :: Text -> Message
+newLeaveMsg username = newMessage LeaveMsg (toJSON username)
 
 data UsersInGame = UsersInGame{
     usersIG :: [String]

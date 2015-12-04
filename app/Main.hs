@@ -293,14 +293,21 @@ handleAccept app acceptingPlayer = do
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeExpMsg (toJSON $ (ChallengeExp acceptingPlayer))
 
--- leaves the game by clearing the game channel IORef
-leaveGame :: IORef (Maybe (TChan Message)) -> IO ()
-leaveGame gameChannel = do
-    modifyIORef gameChannel (\_ -> Nothing)
-
---need to actually implement this
-handleLeave app msg = do
-    liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "leave"
+-- removes player from game
+-- notifies other player
+-- clears their game channel
+handleLeave app username = do
+    let strUsername = unpack username;
+    liftIO $ atomically $ modifyTVar (userToGameId app) (\mapping -> Map.delete strUsername mapping)
+    userToGameChan <- liftIO $ readTVarIO (userGameChannels app)
+    let maybeIORefGC = Map.lookup strUsername userToGameChan
+    if isJust maybeIORefGC
+        then do
+            let iorefGC = fromJust maybeIORefGC
+            ch <- liftIO $ readIORef iorefGC
+            liftIO $ atomically $ writeTChan (fromJust ch) $ newLeaveMsg username
+            liftIO $ modifyIORef iorefGC (\_ -> Nothing)
+        else return ()
 
 handleReady app player = do
     let pid = unpack player 
@@ -330,7 +337,7 @@ handleMsg app msg = do
         "accept" -> 
             handleAccept app (msgParsed !! 1)
         "leave" -> 
-            handleLeave app msg
+            handleLeave app (msgParsed !! 1)
         "ready" ->
             handleReady app (msgParsed !! 1)
         _ -> 
@@ -622,6 +629,7 @@ getLobbyR username = do
             }
 
             function leaveGame(){
+                sendMessageToServer("leave`"+username);
             };
 
             function logout(){
