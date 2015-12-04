@@ -2,7 +2,6 @@
 module Game
     ( Game
     , printGame
-    , gameStatus
     , initGame
     , tick
     , movePaddle
@@ -12,7 +11,6 @@ module Game
     , setCompleted
     , getGameMsg
     , Direction(Up,Down)
-    , Status (Initial,LeftReady,RightReady,Playing,CompletedNotLogged,Completed)
     ) where
 {-
 User key movements translate to either
@@ -32,12 +30,7 @@ import Messages
 import Data.Aeson
 import Data.Maybe
 import Data.ByteString
---import Control.Concurrent.STM
 import GHC.Generics
---import Data.IORef
-
---import Control.Concurrent (threadDelay, forkIO)
---import Control.Monad
 
 printGame :: Game -> IO ()
 printGame game = do
@@ -112,7 +105,6 @@ data GameState = GameState {
 } deriving (Show, Generic)
 instance ToJSON GameState
 
--- dataChan and dbChan are write only channels
 data Game = Game {
     gameStatus :: Status,
     lPlayer :: String, 
@@ -205,29 +197,6 @@ paddleHit state =
             = -vx
         | otherwise = vx
 
-getGameMsg :: Game -> Message
-getGameMsg game = newMessage GameMsg (toJSON game)
-
---getStatusUpdate :: Game -> Message
---getStatusUpdate game = newMessage GameStatusMsg (toJSON $ createStatusUpdate game)
-
--- move out and use externally
---writeStatusUpdate :: Game -> IO ()
---writeStatusUpdate game = do
---    let msg = newMessage GameStatusMsg (toJSON $ createStatusUpdate game)
---    ch <- readIORef (gameChan game)
---    atomically $ writeTChan ch msg
-
-{- 
-functions for externally updating game state
--}
--- tick should be followed by writing a status update to channel
-tick :: Game -> Game
-tick game =
-    if (gameStatus game) /= Playing
-        then game
-        else tick' game
-
 tick' :: Game -> Game
 tick' game = do 
     let state' = update state
@@ -239,6 +208,27 @@ tick' game = do
     GameState _ _ _ lPoints rPoints _ _ _ = state
     update = paddleHit . moveBall . detectCollision
 
+movePaddle' :: GameState -> Paddle -> Double -> Paddle
+movePaddle' state paddle direction =
+    paddle { py = y' }
+  where
+    Paddle x y _ height = paddle
+    newY = y + direction * _PADDLE_MOVE
+    y' = min (_HEIGHT - height) $ max _BOTTOM newY
+
+{------------------------------------------------------ 
+functions for externally seeing and updating game state
+------------------------------------------------------}
+-- tick should be followed by writing a status update to channel
+tick :: Game -> Game
+tick game =
+    if (gameStatus game) /= Playing
+        then game
+        else tick' game
+
+getGameMsg :: Game -> Message
+getGameMsg game = newMessage GameMsg (toJSON game)
+
 movePaddle :: Game -> String -> Direction -> Game
 movePaddle game player direction
     | player == lPlayer = game { state = state {lPaddle = movePaddle' state (lPaddle state) dir} }
@@ -249,14 +239,6 @@ movePaddle game player direction
     dir
         | direction == Up = _UP_DIR
         | direction == Down = _DOWN_DIR
-
-movePaddle' :: GameState -> Paddle -> Double -> Paddle
-movePaddle' state paddle direction =
-    paddle { py = y' }
-  where
-    Paddle x y _ height = paddle
-    newY = y + direction * _PADDLE_MOVE
-    y' = min (_HEIGHT - height) $ max _BOTTOM newY
 
 getWinLose :: Game -> Maybe (String, String)
 getWinLose game
@@ -280,9 +262,11 @@ setReady game player =
         | (player == rPlayer) && (status == LeftReady) = Playing
         | otherwise = status
 
+-- do score logging after this
 needsLogging :: Game -> Bool
 needsLogging game = (gameStatus game) == CompletedNotLogged
 
+-- write status update after this
 setCompleted :: Game -> Game
 setCompleted game =
     if (gameStatus game) == CompletedNotLogged

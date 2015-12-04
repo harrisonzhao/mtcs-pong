@@ -19,7 +19,8 @@ import Data.ByteString.Lazy (toStrict)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text, isPrefixOf, splitOn, unpack, pack, concat)
-import Data.String 
+import Data.String
+import qualified Data.Sequence as Seq
 import qualified Data.Text as L
 
 import Yesod.Form.Jquery
@@ -29,7 +30,6 @@ import Control.Monad.Logger (runStderrLoggingT)
 import Control.Monad.Reader
 import Control.Lens
 
---import Control.Monad.IO.Class (liftIO)
 import Database.Persist
 import Database.Persist.Sqlite
 import Database.Persist.Sql
@@ -39,11 +39,16 @@ import Messages
 import Game
 
 data Pong = Pong {
+    -- sqlite stuff
     persistConfig :: SqliteConf,
     connPool :: ConnectionPool,
-    games :: TVar [IO (Game, TChan Message)],
+
+    -- game stuff
+    games :: TVar (Seq.Seq(Game)),
+    gameChans :: TVar [TChan Message],
     nextGameId :: TVar Int,
-    --chatChan can send chat and challenges
+
+    --chatChan to send chat and challenges
     chatChan :: TChan Message,
     --userToGameId maps users to an index for games list
     userToGameId :: TVar (Map.Map String Int),
@@ -146,60 +151,30 @@ newAccountForm = renderDivs $ NewPerson
 
 _GAME_TICK_DELAY = 100000
 
---updateGame :: Game -> IO (Game)
---updateGame game = (tick game) >>= \g -> do
---    print "im called update"
---    if needsLogging g
---        then do
---            print "needs logging"
---            let maybeWinLosePair = getWinLose g
---            -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
---            -- update database maybe in a different thread that kills itself
---            -- maybe pass along the gameChan so a db updated message can also be seen by users
---            -- in order for users to be updated, another message type would be needed
---            setCompleted g
---        else do 
---            print "doesnt need logging" 
---            return g
-
---updateGames :: TVar [IO Game] -> IO ()
---updateGames games = forever $ do
---    gs <- readTVarIO games
---    mapM_ (\iog -> iog >>= (\g -> do
---        ch <- readIORef (gameChan g)
---        atomically $ writeTChan ch (newChatMsg "in game now bitches"))) gs
---    atomically $ modifyTVar games (\gs -> map (\iog -> iog >>= updateGame) gs)
---    threadDelay _GAME_TICK_DELAY
-
-updateGame :: IO (Game, TChan Message) -> IO (Game, TChan Message)
-updateGame gameAndGameChan = do
-    pair <- gameAndGameChan
-    let game = tick (fst pair)
-    let chan = snd pair
-    printGame game
-    atomically $ writeTChan chan (getGameMsg game)
-    if (needsLogging game)
-        then do
-            print "needs logging"
-            let maybeWinLosePair = getWinLose game
-            -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
-            -- update database maybe in a different thread that kills itself
-            -- maybe pass along the gameChan so a db updated message can also be seen by users
-            -- in order for users to be updated, another message type would be needed
-            let game' = setCompleted game
-            return (game', chan)
-        else do
-            print "doesn't need logging"
-            return (game, chan)
-
-updateGames :: TVar [IO (Game, TChan Message)] -> IO ()
-updateGames games = forever $ do
+-- run with forkIO
+updateGames :: TVar (Seq.Seq(Game)) -> TVar [TChan Message] -> IO ()
+updateGames games chans = forever $ do
     gs <- readTVarIO games
-    mapM_ (\iog -> iog >>= (\p -> do
-        let ch = snd p
-        atomically $ writeTChan ch (newMessage GarbageMsg (toJSON Garbage)))) gs
-    print $ length gs
-    atomically $ modifyTVar games (\gs -> map (\pair -> updateGame pair) gs)
+    let newGames = Seq.mapWithIndex (\_ g -> if needsLogging g
+        then setCompleted g
+        else tick g) gs
+    chans <- readTVarIO chans
+    Seq.foldlWithIndex (\_ ind elem -> do
+        atomically $ writeTChan (chans !! ind) (getGameMsg elem)
+        if needsLogging elem
+            then do
+                --print "needs logging"
+                let maybeWinLosePair = getWinLose elem
+                -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
+                -- update database maybe in a different thread that kills itself
+                -- maybe pass along the gameChan so a db updated message can also be seen by users
+                -- in order for users to be updated, another message type would be needed
+                return ()
+            else do 
+                --print "doesnt need logging"
+                return ()
+        ) (return ()) newGames
+    atomically $ modifyTVar' games (\_ -> newGames)
     threadDelay _GAME_TICK_DELAY
 
 -- call this function to make a given user join a game
@@ -207,37 +182,24 @@ updateGames games = forever $ do
 -- gameChannel is the user's gameChannel IORef, which is created in appHandler
 joinGame :: String -> Pong -> IO ()
 joinGame username app = do
-    gamesLength <- readTVarIO (nextGameId app)
     userGameIdMap <- readTVarIO (userToGameId app)
     userGameChannels <- readTVarIO (userGameChannels app)
     let maybeGameChan = Map.lookup username userGameChannels
     let gameId = Map.lookup username userGameIdMap
     if (isJust gameId && isJust maybeGameChan)
         then do
-            let gameAndGameChan = getGame (fromJust gameId) gamesLength (games app)
-            if (isJust gameAndGameChan)
-                then do
-                    pair <- fromJust gameAndGameChan
-                    let ch = snd pair
-                    let gameCh = fromJust maybeGameChan
-                    --ch <- (fromJust game) >>= (\g -> readIORef (gameChan g))
-                    duppedCh <- atomically $ dupTChan ch
-                    modifyIORef gameCh (\_ -> Just duppedCh)
-                    putStr $ "channel successfully duped for "
-                    atomically $ writeTChan ch $ newMessage ReadyMsg (toJSON Ready)
-                else return ()
+            let userGameChan = fromJust maybeGameChan
+            games <- readTVarIO (games app)
+            gameChans <- readTVarIO (gameChans app)
+            let gid = fromJust gameId
+            let game = Seq.index games gid
+            let ch = gameChans !! gid
+            dupedCh <- atomically $ dupTChan ch
+            modifyIORef userGameChan (\_ -> Just dupedCh)
+            putStr $ "channel successfully duped for "
+            print username
+            return ()
         else return ()
-
--- leaves the game by clearing the game channel IORef
-leaveGame :: IORef (Maybe (TChan Message)) -> IO ()
-leaveGame gameChannel = do
-    modifyIORef gameChannel (\_ -> Nothing)
-
-getGame :: Int -> Int -> TVar [IO (Game, TChan Message)] -> Maybe (IO (Game, TChan Message))
-getGame id gamesLength games = do
-    if id < gamesLength
-        then Just $ (readTVarIO games) >>= (\games -> games !! id) 
-        else Nothing
 
 -- Initialized by passing in the three parameters,
 -- each accepting connection has a different copy
@@ -275,14 +237,9 @@ msgSource username gameChan chatChan = forever $ do
 handleChat app fromPlayer msg = do 
     liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChatMsg (toJSON $ (Chat fromPlayer msg))
 
-moveGamePaddle' :: [IO (Game, TChan Message)] -> Int -> String -> Direction -> [IO (Game, TChan Message)]
-moveGamePaddle' games gid username direction = do
-    let replaceOp = (\gameAndGameChan -> gameAndGameChan >>= (\pair -> return ((movePaddle (fst pair) username direction), snd pair)))
-    replace' gid replaceOp games
-
-moveGamePaddle :: TVar [IO (Game, TChan Message)] -> Int -> String -> Direction -> IO ()
+moveGamePaddle :: TVar (Seq.Seq(Game)) -> Int -> String -> Direction -> IO ()
 moveGamePaddle games gid username direction = do
-    atomically $ modifyTVar games (\gs -> moveGamePaddle' gs gid username direction)
+    atomically $ modifyTVar games (\gs -> replace' gid (\game -> movePaddle game username direction) gs)
 
 handleMove app player direction = do
     let pid = unpack player 
@@ -294,30 +251,32 @@ handleMove app player direction = do
             case direction of
                 "up" -> liftIO $ moveGamePaddle (games app) gid pid Up
                 "down" -> liftIO $ moveGamePaddle (games app) gid pid Down
-            return ()
+            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
         else
-            return ()
+            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
+
 handleChallenge app player1 player2 = do
     liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.insert (unpack player2) (unpack player1) s)
     liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeMsg (toJSON $ (Challenge player1 player2))
 
 createGame :: Pong -> String -> String -> IO ()
 createGame app lPlayer rPlayer = do
+    chan <- atomically $ newBroadcastTChan
     atomically $ do
         currentGameId <- readTVar (nextGameId app)
         modifyTVar (nextGameId app) (\n -> n + 1)
-        chan <- newBroadcastTChan
-        modifyTVar (games app) (\gs -> gs ++ [return (initGame lPlayer rPlayer, chan)])
+        modifyTVar (games app) (\gs -> gs Seq.|> (initGame lPlayer rPlayer))
+        modifyTVar (gameChans app) (\gcs -> gcs ++ [chan])
         modifyTVar (userToGameId app) (\mapping -> Map.insert lPlayer currentGameId mapping)
         modifyTVar (userToGameId app) (\mapping -> Map.insert rPlayer currentGameId mapping)
     joinGame lPlayer app
     joinGame rPlayer app
+    atomically $ writeTChan chan $ newChatMsg $ "Pop Up Ready"
 
 handleAccept app acceptingPlayer = do
     let acceptingPlayerU = unpack acceptingPlayer
     myMap <- liftIO $ readTVarIO (challengedToChallenger app)
     let challenger = Map.lookup acceptingPlayerU myMap
-    --currentGameId <- liftIO $ readTVarIO (nextGameId app)
     if isJust challenger
         then do
             let challengingPlayer = fromJust challenger
@@ -326,23 +285,20 @@ handleAccept app acceptingPlayer = do
             
             usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
             liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
-    
             userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
             liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
 
-            --liftIO $ joinGame challengingPlayer app 
-            --liftIO $ joinGame acceptingPlayerU app
-
-            --gamesLength <- liftIO $ readTVarIO (nextGameId app)
-            --gameAndGameChan <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
-            --let game = fst gameAndGameChan
-            --let ch = snd gameAndGameChan
             return ()
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeExpMsg (toJSON $ (ChallengeExp acceptingPlayer))
-    
+
+-- leaves the game by clearing the game channel IORef
+leaveGame :: IORef (Maybe (TChan Message)) -> IO ()
+leaveGame gameChannel = do
+    modifyIORef gameChannel (\_ -> Nothing)
+
+--need to actually implement this
 handleLeave app msg = do
-    --need to actually implement this
     liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "leave"
 
 handleReady app player = do
@@ -351,29 +307,14 @@ handleReady app player = do
     let gameId = Map.lookup pid myMap
     if isJust gameId
         then do
-            --gamesLength <- liftIO $ readTVarIO (nextGameId app)
-            --gameAndGameChan <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
-            --let game = fst gameAndGameChan
-            --liftIO $ print (gameStatus game)
             let gid = fromJust gameId
-            let replaceOp = (\gameAndGameChan -> gameAndGameChan >>= (\pair -> return (setReady (fst pair) (unpack player), snd pair)))
             liftIO $ atomically $ modifyTVar (games app) (\gs ->
-                replace' gid replaceOp gs)
-            --game <- liftIO $ fromJust $ getGame (fromJust gameId) gamesLength (games app)
-            --liftIO $ print (gameStatus game)
+                replace' gid (\game -> setReady game (unpack player)) gs)
         else
             return ()
 
---setGameReady :: [IO (Game, TChan Message)] -> Int -> Text -> [IO (Game, TChan Message)]
---setGameReady games gid player = do 
---    let gameAndGameChan' = (games !! gid) >>= (\pair -> ((setReady (fst pair) (unpack player)), snd pair))
---    replace' gid (return gameAndGameChan') games
-
-replace' :: Int -> (a -> a) -> [a] -> [a]
-replace' index op list = (take index list) ++ [op (list !! index)] ++ (drop (index+1) list)
-
-handleOther app msg = do
-    return ()
+replace' :: Int -> (a -> a) -> Seq.Seq a -> Seq.Seq a
+replace' ind op list = Seq.update ind (op (Seq.index list ind)) list
 
 handleMsg app msg = do
     let msgParsed = splitOn "`" msg
@@ -392,7 +333,7 @@ handleMsg app msg = do
         "ready" ->
             handleReady app (msgParsed !! 1)
         _ -> 
-            handleOther app msg
+            return ()
     mySet <- liftIO $ readTVarIO (usersOnline app)
     liftIO $ print $ Set.toList mySet
     myMap <- liftIO $ readTVarIO (userToGameId app)
@@ -418,7 +359,6 @@ appHandler username = do
     race_
         (msgs $$ sinkWSText)
         (sourceWS $$ mapM_C msgHandler)
-
 
 getLoginR :: Handler Html
 getLoginR = do
@@ -792,17 +732,16 @@ main = do
     pool <- createPoolConfig conf
     flip runSqlPersistMPool pool $ do
         runMigration migrateAll
---main = runStderrLoggingT $ withSqlitePool "test.db3" openConnectionCount
---  $ \pool -> liftIO $ do
---    runResourceT $ flip runSqlPool pool $ do
---         runMigration migrateAll
-    games <- newTVarIO ([] :: [IO (Game, TChan Message)])
+
+    games <- newTVarIO (Seq.empty :: Seq.Seq (Game))
+    gameChans <- newTVarIO ([] :: [TChan Message])
     nextGameId <- newTVarIO (0 :: Int)
+
     chatChan <- atomically newBroadcastTChan
     userToGameId <- newTVarIO (Map.empty)
     challengedToChallenger <- newTVarIO (Map.empty)
     usersOnline <- newTVarIO (Set.empty)
     userGameChannels <- newTVarIO (Map.empty)
     print $ encode $ toJSON $ newChatMsg "hello world"
-    forkIO $ updateGames games
-    warp 3000 $ Pong conf pool games nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels
+    forkIO $ updateGames games gameChans
+    warp 3000 $ Pong conf pool games gameChans nextGameId chatChan userToGameId challengedToChallenger usersOnline userGameChannels
