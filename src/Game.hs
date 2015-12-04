@@ -42,17 +42,17 @@ printGame game = do
     print (state game)
     print "=========== END GAME PRINT ==========="
 
-_WIDTH = 500
-_HEIGHT = 600
+_WIDTH = 1550
+_HEIGHT = 676
 _BOTTOM = 0
 _LEFT = 0
 
-_INITIAL_BALL_X = _HEIGHT / 2
-_INITIAL_BALL_Y = _WIDTH / 2
+_INITIAL_BALL_X = _WIDTH / 2
+_INITIAL_BALL_Y = _HEIGHT / 2
 _INITIAL_BALL_V = 2
 
-_PADDLE_WIDTH = 20
-_PADDLE_HEIGHT = 5
+_PADDLE_WIDTH = 15
+_PADDLE_HEIGHT = 70
 _BALL_RADIUS = 5
 _MAX_SCORE = 1
 _PADDLE_MOVE = 10
@@ -135,8 +135,9 @@ initPaddle isLeft =
            }
         where
             xPos = if isLeft
-                then _LEFT + _PADDLE_HEIGHT
-                else _WIDTH - _PADDLE_HEIGHT
+                then _LEFT + _PADDLE_WIDTH - 15
+                else _WIDTH - _PADDLE_WIDTH 
+
 
 initState :: GameState
 initState =

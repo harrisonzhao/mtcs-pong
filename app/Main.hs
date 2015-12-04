@@ -149,7 +149,7 @@ newAccountForm = renderDivs $ NewPerson
     <*> areq passwordField "Password: " Nothing
     <*> areq passwordField "Confirm: " Nothing
 
-_GAME_TICK_DELAY = 100000
+_GAME_TICK_DELAY = 10000
 
 -- run with forkIO
 updateGames :: TVar (Seq.Seq(Game)) -> TVar [TChan Message] -> IO ()
@@ -252,9 +252,9 @@ handleMove app player direction = do
             case direction of
                 "up" -> liftIO $ moveGamePaddle (games app) gid pid Up
                 "down" -> liftIO $ moveGamePaddle (games app) gid pid Down
-            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
+            return ()
         else
-            liftIO $ atomically $ writeTChan (chatChan app) $ newChatMsg "move"
+            return ()
 
 handleChallenge app player1 player2 = do
     liftIO $ atomically $ modifyTVar (challengedToChallenger app) (\s -> Map.insert (unpack player2) (unpack player1) s)
@@ -399,7 +399,7 @@ getLobbyR username = do
             .chatBox {
                 position: absolute;
                 width: 1853px;
-                height: 225px;
+                height: 210px;
                 border: 1px teal solid;
                 float:left;
                 margin-top:1px;
@@ -416,7 +416,7 @@ getLobbyR username = do
                 color:orange;
                 border:1px teal solid;
                 width:300px;
-                height:677px;
+                height:691px;
                 overflow:scroll;
                 margin-left:1px;
                 
@@ -443,7 +443,7 @@ getLobbyR username = do
             .game {
                 background: #daeff5;
                 width: 1550px;
-                height: 676px;
+                height: 691px;
                 position: absolute;
                 left: 0;
                 top: 0;
@@ -467,7 +467,7 @@ getLobbyR username = do
                 position: absolute;
                 width: 15px;
                 height: 70px;
-                left: 0px;
+                left: 1539px;
                 top: 340px;
                 border-radius: 5px;
                 border: 1px solid #000000
@@ -477,7 +477,7 @@ getLobbyR username = do
                 position: absolute;
                 width: 15px;
                 height: 70px;
-                left: 1539px;
+                left: 0px;
                 top: 340px;
                 border-radius: 5px;
                 border: 1px solid #000000
@@ -648,13 +648,11 @@ getLobbyR username = do
                 if ($(document.getElementById("message")).is( ":focus" ) || (pos == 0) || !playerInGame)
                     return;
                 if(key==38){
-                    movePaddle("up");
+                    movePaddle("down");
                 }
                 if(key==40)
-                    movePaddle("down");
-            },100);
-
-            var ball = { speed: 3, x: 550, y: 230, directionX: 1, directionY: 1 };
+                    movePaddle("up");
+            },50);
 
             function updatePaddlesPos(lPos,rPos) {
                 $("#paddleA").css("top", parseInt(lPos));
