@@ -160,10 +160,11 @@ updateGames games chans = forever $ do
         else tick g) gs
     chans <- readTVarIO chans
     Seq.foldlWithIndex (\_ ind elem -> do
+        -- printGame elem
         atomically $ writeTChan (chans !! ind) (getGameMsg elem)
         if needsLogging elem
             then do
-                --print "needs logging"
+                -- print "needs logging"
                 let maybeWinLosePair = getWinLose elem
                 -- maybeWinLosePair is Maybe (a, b) where (a, b) is a tuple
                 -- update database maybe in a different thread that kills itself
@@ -171,7 +172,7 @@ updateGames games chans = forever $ do
                 -- in order for users to be updated, another message type would be needed
                 return ()
             else do 
-                --print "doesnt need logging"
+                -- print "doesnt need logging"
                 return ()
         ) (return ()) newGames
     atomically $ modifyTVar' games (\_ -> newGames)
@@ -271,7 +272,7 @@ createGame app lPlayer rPlayer = do
         modifyTVar (userToGameId app) (\mapping -> Map.insert rPlayer currentGameId mapping)
     joinGame lPlayer app
     joinGame rPlayer app
-    atomically $ writeTChan chan $ newChatMsg $ "Pop Up Ready"
+    atomically $ writeTChan chan $ newMessage ReadyMsg (toJSON Ready)
 
 handleAccept app acceptingPlayer = do
     let acceptingPlayerU = unpack acceptingPlayer
@@ -284,9 +285,9 @@ handleAccept app acceptingPlayer = do
             liftIO $ createGame app challengingPlayer acceptingPlayerU
             
             usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
-            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
+            liftIO $ atomically $ writeTChan (chatChan app) $ newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
             userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
-            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
+            liftIO $ atomically $ writeTChan (chatChan app) $ newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
 
             return ()
         else
@@ -334,12 +335,13 @@ handleMsg app msg = do
             handleReady app (msgParsed !! 1)
         _ -> 
             return ()
-    mySet <- liftIO $ readTVarIO (usersOnline app)
-    liftIO $ print $ Set.toList mySet
-    myMap <- liftIO $ readTVarIO (userToGameId app)
-    liftIO $ print $ Map.toList myMap
-    myMap2 <- liftIO $ readTVarIO (challengedToChallenger app)
-    liftIO $ print $ Map.toList myMap2
+    --mySet <- liftIO $ readTVarIO (usersOnline app)
+    --liftIO $ print $ Set.toList mySet
+    --myMap <- liftIO $ readTVarIO (userToGameId app)
+    --liftIO $ print $ Map.toList myMap
+    --myMap2 <- liftIO $ readTVarIO (challengedToChallenger app)
+    --liftIO $ print $ Map.toList myMap2
+    --return ()
     
 appHandler :: String -> WebSocketsT Handler ()
 appHandler username = do
