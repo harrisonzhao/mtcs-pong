@@ -6,6 +6,8 @@ module Game
     , tick
     , movePaddle
     , getWinLose
+    , getPlayers
+    , isPlaying
     , setReady
     , needsLogging
     , setCompleted
@@ -249,6 +251,12 @@ getWinLose game
   where
     Game _ lPlayer rPlayer state = game
     GameState _ _ _ lPoints rPoints _ _ _ = state
+
+getPlayers :: Game -> (String, String)
+getPlayers game = (lPlayer game, rPlayer game) 
+
+isPlaying :: Game -> Bool 
+isPlaying game = (gameStatus game) == Playing 
 
 -- write status update after this
 setReady :: Game -> String -> Game

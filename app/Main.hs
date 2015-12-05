@@ -294,27 +294,39 @@ handleAccept app acceptingPlayer = do
         else
             liftIO $ atomically $ writeTChan (chatChan app) $ newMessage ChallengeExpMsg (toJSON $ (ChallengeExp acceptingPlayer))
 
--- removes player from game
--- notifies other player
--- clears their game channel
 handleLeave app username = do
     let strUsername = unpack username;
-    liftIO $ atomically $ modifyTVar (userToGameId app) (\mapping -> Map.delete strUsername mapping)
-    userToGameChan <- liftIO $ readTVarIO (userGameChannels app)
-    let maybeIORefGC = Map.lookup strUsername userToGameChan
-    if isJust maybeIORefGC
-        then do
+    userGameIdMap <- liftIO $ readTVarIO (userToGameId app)
+    let gameId = Map.lookup strUsername userGameIdMap
+    if (isJust gameId)
+        then do 
+            gs <- liftIO $ readTVarIO (games app)
+            let gid = fromJust gameId
+            let game = Seq.index gs gid
+            let (lPlayer, rPlayer) = getPlayers game
+            liftIO $ atomically $ modifyTVar (userToGameId app) (\mapping -> Map.delete lPlayer mapping)
+            liftIO $ atomically $ modifyTVar (userToGameId app) (\mapping -> Map.delete rPlayer mapping)
+            userToGameChan <- liftIO $ readTVarIO (userGameChannels app)
+            let maybeIORefGC = Map.lookup lPlayer userToGameChan
+            let maybeIORefGC2 = Map.lookup rPlayer userToGameChan
+
             let iorefGC = fromJust maybeIORefGC
             ch <- liftIO $ readIORef iorefGC
             liftIO $ atomically $ writeTChan (fromJust ch) $ newLeaveMsg username
             liftIO $ modifyIORef iorefGC (\_ -> Nothing)
+            let iorefGC2 = fromJust maybeIORefGC2
+            liftIO $ modifyIORef iorefGC2 (\_ -> Nothing)
+            
             usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
             liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
             userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
-            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))       
+            
+            --set to completed after removing players from that game's channel 
+            liftIO $ atomically $ modifyTVar (games app) (\gs -> replace' gid (\g -> setCompleted g) gs)
         else return ()
 
-handleLeave2 app username = do
+handleComplete app username = do
     let strUsername = unpack username;
     liftIO $ atomically $ modifyTVar (userToGameId app) (\mapping -> Map.delete strUsername mapping)
     userToGameChan <- liftIO $ readTVarIO (userGameChannels app)
@@ -380,7 +392,7 @@ handleMsg app msg = do
         "leave" -> 
             handleLeave app (msgParsed !! 1)
         "complete" -> 
-            handleLeave2 app (msgParsed !! 1)
+            handleComplete app (msgParsed !! 1)
         "ready" ->
             handleReady app (msgParsed !! 1)
         "quit" ->
@@ -607,7 +619,7 @@ getLobbyR username = do
                         leavePopUp(dataParsed.msgData);
                         break;
                     default:
-                        console.log("unknown message");
+                        console.log("unknown message: "+e);
                         break;
                 }
             };
@@ -671,27 +683,21 @@ getLobbyR username = do
             };
 
             function processGameState(gameData){
-                console.log("ProcessGameState is called");
                 if(gameData.gameStatus == "Playing"){
-                    console.log(gameData);
                     playerInGame = true;
-                    console.log("Moving paddleL to "
-                        +gameData.state.lPaddle.py
-                        +" Moving paddleR to "
-                        +gameData.state.rPaddle.py
-                        +" Moving ball to ("
-                        +gameData.state.ball.bx+","
-                        +gameData.state.ball.by+")");
                     updatePaddlesPos(gameData.state.rPaddle.py,gameData.state.lPaddle.py);
                     updateBallPos(gameData.state.ball.bx,gameData.state.ball.by);
                     scoreboard.innerHTML = gameData.state.lPoints + ":" + gameData.state.rPoints;
                 }
                 else if(gameData.gameStatus == "Completed"){
+                    console.log("completed called")
                     completedGame();
-                    if(gameData.state.lPoints>gameData.state.rPoints)
+                    if(gameData.state.lPoints>gameData.state.rPoints){
                         alert(gameData.lPlayer + " wins with score of "+gameData.state.lPoints+"!");
-                    else
+                    }
+                    else{
                         alert(gameData.rPlayer + " wins with score of "+gameData.state.rPoints+"!");
+                    }
                 }
             };
 
