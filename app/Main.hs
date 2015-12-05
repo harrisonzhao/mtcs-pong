@@ -583,29 +583,28 @@ getLobbyR username = do
             };
 
             conn.onmessage = function(e) {
-                message = JSON.parse(e.data);
-                console.log("new message has arrived");
-                switch(message.msgType){
+                dataParsed = JSON.parse(e.data);
+                switch(dataParsed.msgType){
                     case "ChallengeMsg":
-                        challengePopUp(message.msgData.challenger);
+                        challengePopUp(dataParsed.msgData.challenger);
                         break;
                     case "ChatMsg":
-                        addChatMsg(message.msgData.fromUser,message.msgData.chatData);
+                        addChatMsg(dataParsed.msgData.fromUser,dataParsed.msgData.chatData);
                         break;
                     case "ReadyMsg":
                         readyPopUp();
                         break;
                     case "GameMsg":
-                        processGameState(message.msgData);
+                        processGameState(dataParsed.msgData);
                         break;
                     case "UsersOnlineMsg":
-                        updateUsersOnlineList(message.msgData.usersOL);
+                        updateUsersOnlineList(dataParsed.msgData.usersOL);
                         break;
                     case "UsersInGameMsg":
-                        updateUsersInGameList(message.msgData.usersIG);
+                        updateUsersInGameList(dataParsed.msgData.usersIG);
                         break;
                     case "LeaveMsg":
-                        leavePopUp(message.msgData);
+                        leavePopUp(dataParsed.msgData);
                         break;
                     default:
                         console.log("unknown message");
@@ -639,7 +638,7 @@ getLobbyR username = do
                         childSpans[i].innerHTML = childSpans[i].innerHTML+" (Ingame)";
                     }
                     else if (!(childSpans[i].innerHTML.indexOf("Ingame")> (-1))) {
-                        childSpans[i].innerHTML = "<a onclick=createChallengePopup("+JSON.stringify(childSpans[i].innerHTML)+") href>"+childSpans[i].innerHTML+"</a>"
+                        childSpans[i].innerHTML = "<a onclick=createChallengePopup("+JSON.stringify(childSpans[i].innerHTML)+") href=javascript:void(0)>"+childSpans[i].innerHTML+"</a>"
                     }
                 }
             };  
@@ -656,16 +655,12 @@ getLobbyR username = do
                 var accept = confirm("Accept the challenge from "+challenger+"?");
                 if (accept == true) {
                     acceptChallenge();
-                } else {
                 } 
             };
 
             function readyPopUp(){
-                var ready = confirm("Ready to start the game?");
-                if (ready == true) {
-                    declareReady();
-                } else {
-                } 
+                alert("Click OK when ready!");
+                declareReady();
             };
 
             function leavePopUp(user){
@@ -735,15 +730,13 @@ getLobbyR username = do
 
             function logout(){
                 sendMessageToServer("quit`"+username);
+                window.location.href = "http://localhost:3000/login"
             };
 
             function createChallengePopup(challengee){
                 var createChallenge = confirm("Want to challenge "+challengee+"?");
                 if (createChallenge == true) {
                     sendChallenge(challengee);
-                }
-                else{
-
                 }
             };
 
