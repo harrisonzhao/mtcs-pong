@@ -156,7 +156,8 @@ updateGames :: TVar (Seq.Seq(Game)) -> TVar [TChan Message] -> IO ()
 updateGames games chans = forever $ do
     gs <- readTVarIO games
     let newGames = Seq.mapWithIndex (\_ g -> if needsLogging g
-        then setCompleted g
+        then do 
+            setCompleted g
         else tick g) gs
     chans <- readTVarIO chans
     Seq.foldlWithIndex (\_ ind elem -> do
@@ -307,8 +308,48 @@ handleLeave app username = do
             ch <- liftIO $ readIORef iorefGC
             liftIO $ atomically $ writeTChan (fromJust ch) $ newLeaveMsg username
             liftIO $ modifyIORef iorefGC (\_ -> Nothing)
+            usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
+            userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
         else return ()
 
+handleLeave2 app username = do
+    let strUsername = unpack username;
+    liftIO $ atomically $ modifyTVar (userToGameId app) (\mapping -> Map.delete strUsername mapping)
+    userToGameChan <- liftIO $ readTVarIO (userGameChannels app)
+    let maybeIORefGC = Map.lookup strUsername userToGameChan
+    if isJust maybeIORefGC
+        then do
+            let iorefGC = fromJust maybeIORefGC
+            ch <- liftIO $ readIORef iorefGC
+            liftIO $ modifyIORef iorefGC (\_ -> Nothing)
+            usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
+            userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
+        else return ()
+
+handleQuit app username = do
+    let quitter = unpack username 
+    myMap <- liftIO $ readTVarIO (userToGameId app)
+    let gameId = Map.lookup quitter myMap
+    if isJust gameId
+        then do
+            handleLeave app username
+            liftIO $ atomically $ modifyTVar (usersOnline app) (\s -> Set.delete quitter s)
+            usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
+            userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
+        else do
+            liftIO $ atomically $ modifyTVar (usersOnline app) (\s -> Set.delete quitter s)
+            usersOnline2 <- liftIO $ readTVarIO (usersOnline app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersOnlineMsg (toJSON $ (UsersOnline usersOnline2 ))
+            userToGameId2 <- liftIO $ readTVarIO (userToGameId app)
+            liftIO $ atomically $ writeTChan (chatChan app) $  newMessage UsersInGameMsg (toJSON $ (UsersInGame $ Map.keys userToGameId2 ))
+        
+     
 handleReady app player = do
     let pid = unpack player 
     myMap <- liftIO $ readTVarIO (userToGameId app)
@@ -338,8 +379,14 @@ handleMsg app msg = do
             handleAccept app (msgParsed !! 1)
         "leave" -> 
             handleLeave app (msgParsed !! 1)
+        "complete" -> 
+            handleLeave2 app (msgParsed !! 1)
         "ready" ->
             handleReady app (msgParsed !! 1)
+        "quit" ->
+            handleQuit app (msgParsed !! 1)
+        "redirect" ->
+            redirect LoginR
         _ -> 
             return ()
     --mySet <- liftIO $ readTVarIO (usersOnline app)
@@ -391,12 +438,15 @@ getLobbyR username = do
     defaultLayout $ do
         addScriptRemote "https://ajax.googleapis.com/ajax/libs/jquery/1.7.0/jquery.js"
         [whamlet|
+            <div .scoreboard #scoreboard>
             <div .content #content>
                 <div .game #game>
                     <div .paddleA #paddleA></div>
                     <div .paddleB #paddleB></div>
                     <div .ball #ball>
             <div .chatBox #chatBox>
+            <button .quit #quit type="button" onclick="leaveGame()">Quit Game
+            <button .logout #logout type="button" onclick="logout()">Logout
             <div .usersOnLine #usersOnLine>
             <input .message #message type=text>
             <button .send #send type="button" onclick="sendChatMsg()">Send
@@ -414,16 +464,24 @@ getLobbyR username = do
                 left: 0;
                 overflow: scroll;
             }
+            .scoreboard{
+                width: 200px;
+                height: 100px;
+                position: absolute;
+                left: 777px;
+                top: 0px;
+                z-index: 9999;
+            }
             .usersOnLine{
                 position: absolute;
                 right: 0;
-                top: 0;
+                top: 40px;
                 font-family:tahoma;
                 font-size:14px;
                 color:orange;
                 border:1px teal solid;
                 width:300px;
-                height:691px;
+                height:651px;
                 overflow:scroll;
                 margin-left:1px;
                 
@@ -446,6 +504,24 @@ getLobbyR username = do
                 margin:1px;
                 bottom: 0;
                 right: 0;
+            }
+            .logout {
+                position: absolute;
+                width: 150px;
+                height: 40px;
+                float:left;
+                margin:1px;
+                top: 0;
+                right: 0;
+            }
+            .quit {
+                position: absolute;
+                width: 150px;
+                height: 40px;
+                float:left;
+                margin:1px;
+                top: 0;
+                right: 150px;
             }
             .game {
                 background: #daeff5;
@@ -528,6 +604,9 @@ getLobbyR username = do
                     case "UsersInGameMsg":
                         updateUsersInGameList(message.msgData.usersIG);
                         break;
+                    case "LeaveMsg":
+                        leavePopUp(message.msgData);
+                        break;
                     default:
                         console.log("unknown message");
                         break;
@@ -542,6 +621,9 @@ getLobbyR username = do
                 usersOnlineLocal = usersOnlineList;
                 usersOnLine.innerHTML=""
                 for(i=0;i<usersOnlineList.length;i++){
+                    if (usersOnlineList[i] == username){
+                        continue;
+                    }
                     user = document.createElement("span");
                     user.innerHTML=usersOnlineList[i];
                     usersOnLine.appendChild(user);
@@ -574,9 +656,7 @@ getLobbyR username = do
                 var accept = confirm("Accept the challenge from "+challenger+"?");
                 if (accept == true) {
                     acceptChallenge();
-                    console.log("You accepted!");
                 } else {
-                    console.log("You denied!");
                 } 
             };
 
@@ -584,15 +664,21 @@ getLobbyR username = do
                 var ready = confirm("Ready to start the game?");
                 if (ready == true) {
                     declareReady();
-                    console.log("You are ready!");
                 } else {
-                    console.log("You are not ready!");
                 } 
+            };
+
+            function leavePopUp(user){
+                alert(user+" has left the game so it has been stopped!");
+                updatePaddlesPos(338,338);
+                updateBallPos(777,338); 
+                scoreboard.innerHTML="";
             };
 
             function processGameState(gameData){
                 console.log("ProcessGameState is called");
                 if(gameData.gameStatus == "Playing"){
+                    console.log(gameData);
                     playerInGame = true;
                     console.log("Moving paddleL to "
                         +gameData.state.lPaddle.py
@@ -601,8 +687,16 @@ getLobbyR username = do
                         +" Moving ball to ("
                         +gameData.state.ball.bx+","
                         +gameData.state.ball.by+")");
-                    updatePaddlesPos(gameData.state.rPaddle.py,gameData.state.lPaddle.py)
-                    updateBallPos(gameData.state.ball.bx,gameData.state.ball.by)
+                    updatePaddlesPos(gameData.state.rPaddle.py,gameData.state.lPaddle.py);
+                    updateBallPos(gameData.state.ball.bx,gameData.state.ball.by);
+                    scoreboard.innerHTML = gameData.state.lPoints + ":" + gameData.state.rPoints;
+                }
+                else if(gameData.gameStatus == "Completed"){
+                    completedGame();
+                    if(gameData.state.lPoints>gameData.state.rPoints)
+                        alert(gameData.lPlayer + " wins with score of "+gameData.state.lPoints+"!");
+                    else
+                        alert(gameData.rPlayer + " wins with score of "+gameData.state.rPoints+"!");
                 }
             };
 
@@ -632,16 +726,26 @@ getLobbyR username = do
                 sendMessageToServer("leave`"+username);
             };
 
-            function logout(){
+            function completedGame(){
+                sendMessageToServer("complete`"+username);
+                updatePaddlesPos(338,338);
+                updateBallPos(777,338);
+                scoreboard.innerHTML=""
             };
 
+            function logout(){
+                sendMessageToServer("quit`"+username);
+            };
 
             function createChallengePopup(challengee){
                 var createChallenge = confirm("Want to challenge "+challengee+"?");
                 if (createChallenge == true) {
                     sendChallenge(challengee);
                 }
-            }
+                else{
+
+                }
+            };
 
             document.onkeydown=function(e)
             {
