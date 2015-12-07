@@ -125,10 +125,7 @@ createNew un pw = do
   
 getUser un pw = do
   u <- runDB $ selectFirst [PersonUsername ==. un, PersonPassword ==. pw] []
-  case u of
-    Just person -> return $ Right person
-    Nothing -> return $ Left ("Login failed.." :: Text)
-   
+  return u
 --userLoss un = do
  --updateWhere [PersonUsername ==. un] [PersonLoss +=. 1]
  --updateWhere [PersonUsername ==. un] [PersonGamespl +=. 1]
@@ -823,17 +820,21 @@ postLoginR = do
             let postedUsername = unpack(username user)
             let postedPassword = unpack(password user)
             authResult <- getUser postedUsername postedPassword
+            case authResult of
+                --Nothing -> return $ Left ("Login failed.." :: Text)
+                Just person -> do  
+                    --return $ Right person
+                    redirect (LobbyR $ postedUsername)                    
             -- AUTHENTICATE***
-            redirect (LobbyR $ postedUsername)
         --defaultLayout [whamlet|<p>Login Result:<p>#{show user}|]
-        _ -> defaultLayout
-            [whamlet|
-                <h1>Uh oh, something went wrong with the Login POST request.</h1>
-                <p>Invalid input, let's try again.
-                <form method=post action=@{LoginR} enctype=#{enctype}>
-                    ^{widget}
-                    <button>LoginAttempt2
-            |]
+                _ -> defaultLayout
+                    [whamlet|
+                        <h1>Uh oh, something went wrong with the Login POST request.</h1>
+                        <p>Invalid input, let's try again.
+                        <form method=post action=@{LoginR} enctype=#{enctype}>
+                            ^{widget}
+                            <button>LoginAttempt2
+                    |]
             
 openConnectionCount :: Int
 openConnectionCount = 10            
