@@ -33,6 +33,7 @@ import Data.Aeson
 import Data.Maybe
 import Data.ByteString
 import GHC.Generics
+import System.Random
 
 printGame :: Game -> IO ()
 printGame game = do
@@ -55,7 +56,7 @@ _INITIAL_BALL_V = 2
 
 _PADDLE_WIDTH = 15
 _PADDLE_HEIGHT = 70
-_BALL_RADIUS = 5
+_BALL_RADIUS = 1
 _MAX_SCORE = 5
 _PADDLE_MOVE = 10
 
@@ -118,14 +119,21 @@ instance ToJSON Game
 createStatusUpdate :: Game -> StatusUpdate
 createStatusUpdate game = StatusUpdate { status = gameStatus game }
 
-initBall :: Ball
-initBall =
+initBall :: Int -> Ball
+initBall num = do 
     Ball { bx = _INITIAL_BALL_X
          , by = _INITIAL_BALL_Y
-         , bvx = _INITIAL_BALL_V
-         , bvy = _INITIAL_BALL_V
+         , bvx = fst $ getRandom num
+         , bvy = snd $ getRandom num 
          , bradius = _BALL_RADIUS
          }
+
+getRandom num 
+    | (mod num 4) == 3 = (2,2)
+    | (mod num 4) == 2 = (-2,2)
+    | (mod num 4) == 1 = (-2,-2)
+    | (mod num 4) == 0 = (2,-2)
+
 
 -- Paddle x, y denote lower left corner
 initPaddle :: Bool -> Paddle
@@ -143,7 +151,7 @@ initPaddle isLeft =
 
 initState :: GameState
 initState =
-    GameState { ball = initBall
+    GameState { ball = initBall 0
               , lPaddle = initPaddle True
               , rPaddle = initPaddle False
               , lPoints = 0
@@ -166,8 +174,8 @@ detectCollision :: GameState -> GameState
 detectCollision state
     | (y + ballRadius) >= height = state { ball = theBall { by = height - ballRadius, bvy = -vy } }
     | (y - ballRadius) <= 0 = state { ball = theBall { by = ballRadius, bvy = -vy } }
-    | (x + ballRadius) >= width = state { ball = initBall, lPoints = lPoints + 1}
-    | (x - ballRadius) <= 0 = state { ball = initBall, rPoints = rPoints + 1 }
+    | (x + ballRadius) >= width = state { ball = initBall (lPoints+rPoints), lPoints = lPoints + 1}
+    | (x - ballRadius) <= 0 = state { ball = initBall (lPoints+rPoints), rPoints = rPoints + 1 }
     | otherwise = state
   where
     GameState theBall _ _ lPoints rPoints width height _ = state
@@ -190,13 +198,13 @@ paddleHit state =
     vx'
         -- left paddle
         |   x - ballRadius <= xl + lwidth &&
-            y + ballRadius >= yl &&
-            y <= yl + lheight
+            y <= yl + lheight &&
+            y >= yl - lheight 
             = -vx
         -- right paddle
-        |   x + ballRadius >= xr &&
-            y + ballRadius >= yr &&
-            y <= yr + rheight
+        |   x + ballRadius >= xr - rwidth &&
+            y <= yr + rheight &&
+            y >= yr -rheight 
             = -vx
         | otherwise = vx
 
@@ -209,7 +217,7 @@ tick' game = do
   where
     Game _ _ _ state = game
     GameState _ _ _ lPoints rPoints _ _ _ = state
-    update = paddleHit . moveBall . detectCollision
+    update = moveBall . paddleHit . detectCollision
 
 movePaddle' :: GameState -> Paddle -> Double -> Paddle
 movePaddle' state paddle direction =

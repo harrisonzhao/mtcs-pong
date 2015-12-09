@@ -21,6 +21,7 @@ library
                      , stm
                      , text
                      , containers
+                     , random
   default-language:    Haskell2010
 
 executable mtcs-pong-exe
